@@ -24,6 +24,7 @@ import {
 } from "../../api/volunteerCleaning";
 import { useAppSelector } from "../../store/hooks";
 import CleaningPhotoPreview from "./CleaningPhotoPreview";
+import CleaningAttendanceControls from "./CleaningAttendanceControls";
 
 const statusMeta: Record<CleaningPhotoVersion["status"], { label: string; color: string }> = {
   pending: { label: "Awaiting review", color: "blue" },
@@ -38,7 +39,7 @@ type SelectedPhoto = {
   photo: CleaningPhotoVersion;
 };
 
-const CleaningTaskPhotoHistory = ({ taskLogId }: { taskLogId: number }) => {
+const CleaningTaskPhotoHistory = ({ taskLogId, onChange }: { taskLogId: number; onChange?: () => void | Promise<void> }) => {
   const userId = useAppSelector((state) => state.session.loggedUserId);
   const mobile = useMediaQuery("(max-width: 48em)");
   const [opened, setOpened] = useState(false);
@@ -59,13 +60,13 @@ const CleaningTaskPhotoHistory = ({ taskLogId }: { taskLogId: number }) => {
       leftSection={<IconPhoto size={16} />}
       onClick={() => setOpened(true)}
     >
-      View cleaning photos
+      Cleaning photos & attendance
     </Button>
 
     <Modal
       opened={opened}
       onClose={() => { setOpened(false); setSelectedPhoto(null); }}
-      title="Cleaning photo history"
+      title="Cleaning photos & attendance"
       size="xl"
       fullScreen={mobile}
       centered
@@ -113,8 +114,9 @@ const CleaningTaskPhotoHistory = ({ taskLogId }: { taskLogId: number }) => {
                 <Text size="sm" c="dimmed">{submission.shiftName} - {dayjs(submission.taskDate).format("D MMM YYYY")}</Text>
                 <Text size="xs" c="dimmed">{submissionPhotoCount} {submissionPhotoCount === 1 ? "uploaded photo" : "uploaded photos"}</Text>
               </Stack>
+              <CleaningAttendanceControls submission={submission} onChange={onChange} />
               <Accordion multiple defaultValue={submission.slots.filter((slot) => slot.history.length > 0).map((slot) => slot.key)}>
-                {submission.slots.map((slot) => <Accordion.Item key={slot.key} value={slot.key}>
+                {submission.slots.filter((slot) => !submission.attendanceResolution || slot.history.length > 0).map((slot) => <Accordion.Item key={slot.key} value={slot.key}>
                   <Accordion.Control>
                     <Group justify="space-between" wrap="nowrap" pr="xs">
                       <Text fw={600} size="sm">{slot.label}</Text>

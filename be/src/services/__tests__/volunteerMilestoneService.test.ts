@@ -48,6 +48,7 @@ jest.mock('../../models/VolunteerShiftAttendance.js', () => ({
 }));
 
 import AssistantManagerTaskLog from '../../models/AssistantManagerTaskLog.js';
+import AuditLog from '../../models/AuditLog.js';
 import ReviewArchive from '../../models/ReviewArchive.js';
 import ReviewAssignment from '../../models/ReviewAssignment.js';
 import ReviewCounterEntry from '../../models/ReviewCounterEntry.js';
@@ -72,6 +73,17 @@ import {
   saveVolunteerManagementFeedback,
   selectVolunteerCleaningEvidence,
 } from '../volunteerMilestoneService.js';
+
+it('uses on-time cleaning attendance only after task completion, but accepts explicit absence or excuse immediately', () => {
+  const attendance: any = { status: 'attended', checkKind: 'cleaning', subjectUserId: 7, evidenceTaskLogId: 10,
+    evidenceShiftInstanceId: 19, evidenceShiftTypeId: 7, evidenceTaskLog: { id: 10, taskDate: '2026-11-13', status: 'pending' } };
+  const assignment: any = { userId: 7, shiftInstance: { id: 19, shiftTypeId: 7, date: '2026-11-13' }, volunteerAttendance: attendance };
+  expect(currentVolunteerAttendance(assignment)).toBeUndefined();
+  attendance.evidenceTaskLog.status = 'completed'; expect(currentVolunteerAttendance(assignment)).toBe(attendance);
+  attendance.evidenceTaskLog.status = 'pending';
+  for (const status of ['absent', 'excused']) { attendance.status = status; expect(currentVolunteerAttendance(assignment)).toBe(attendance); }
+  attendance.evidenceTaskLog.status = 'waived'; expect(currentVolunteerAttendance(assignment)).toBeUndefined();
+});
 
 describe('volunteer milestone calculations', () => {
   beforeEach(() => {
@@ -396,6 +408,22 @@ describe('volunteer milestone calculations', () => {
     jest.spyOn(VolunteerShiftAttendance, 'findOrCreate').mockResolvedValue([{ evidenceTaskLogId: 10, revision: 3, update }, false] as never);
     await expect(recordVolunteerAttendance({ shiftAssignmentId: 82, status: 'attended', notes: null, actorId: 3 })).rejects.toMatchObject({ status: 409 });
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows an audited manual correction of automatic cleaning attendance without later automatic overwrites', async () => {
+    const transaction = { LOCK: { UPDATE: 'UPDATE' } };
+    (VolunteerShiftAttendance.sequelize!.transaction as jest.Mock).mockImplementation(async (callback) => callback(transaction));
+    jest.spyOn(ShiftAssignment, 'findByPk').mockResolvedValue({ id: 82, userId: 7, shiftInstanceId: 19,
+      shiftInstance: { id: 19, date: '2026-08-01', timeStart: '18:00:00', timeEnd: '22:00:00', scheduleWeek: { id: 5, state: 'published' } } } as never);
+    jest.spyOn(StaffProfile, 'findOne').mockResolvedValue({ userId: 7, staffType: 'volunteer', user: { id: 7 } } as never);
+    const update = jest.fn();
+    jest.spyOn(AuditLog, 'create').mockResolvedValue({} as never);
+    jest.spyOn(VolunteerShiftAttendance, 'findOrCreate').mockResolvedValue([{ id: 42, evidenceTaskLogId: 10,
+      evidenceFileId: 'cleaning-submission-9', checkKind: 'cleaning', status: 'attended', revision: 3, update }, false] as never);
+    await recordVolunteerAttendance({ shiftAssignmentId: 82, status: 'late', notes: 'Arrived late, cleaned afterwards', actorId: 3 });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ status: 'late', checkKind: null, evidenceTaskLogId: null, revision: 4 }), { transaction });
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ action: 'cleaning.attendance_corrected', actorId: 3,
+      metaJson: expect.objectContaining({ previousStatus: 'attended', status: 'late', evidenceFileId: 'cleaning-submission-9' }) }), { transaction });
   });
 
   it('increments legacy attendance revisions under the assignment lock', async () => {

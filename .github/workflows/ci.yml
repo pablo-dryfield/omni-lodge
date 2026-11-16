@@ -411,6 +411,9 @@ jobs:
       - name: Migrate a fresh database
         run: npm run migrate:runtime
 
+      - name: Verify historical cleaning attendance repair
+        run: node --import tsx --test integration-tests/cleaning-attendance-migration.test.mjs
+
       - name: Run migrations again
         run: npm run migrate:runtime
 

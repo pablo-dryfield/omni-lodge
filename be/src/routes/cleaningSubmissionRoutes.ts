@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import multer from 'multer';
 import authMiddleware from '../middleware/authMiddleware.js';
 import { getCleaningSubmissionDetail, getCleaningTaskPhotoHistory, getMyCleaningSubmissions, patchCleaningPhotoReview,
-  postCleaningPhoto, streamCleaningPhoto, postWaiveCanceledCleaningTask } from '../controllers/cleaningSubmissionController.js';
+  postCleaningPhoto, streamCleaningPhoto, postWaiveCanceledCleaningTask, patchCleaningAttendance } from '../controllers/cleaningSubmissionController.js';
 import { CLEANING_PHOTO_MAX_BYTES } from '../services/cleaningSubmissionRulesService.js';
 
 const router = Router();
@@ -14,6 +14,7 @@ router.get('/me', getMyCleaningSubmissions);
 router.post('/tasks/:taskLogId/waive', postWaiveCanceledCleaningTask);
 router.get('/tasks/:taskLogId', getCleaningTaskPhotoHistory);
 router.get('/:submissionId', getCleaningSubmissionDetail);
+router.patch('/:submissionId/attendance', patchCleaningAttendance);
 router.get('/:submissionId/photos/:photoId', streamCleaningPhoto);
 router.post('/:submissionId/slots/:slotKey/photos', (req: Request, res: Response, next: NextFunction) => {
   upload(req, res, (error: unknown) => {

@@ -5,7 +5,8 @@ import ShiftAssignment from './ShiftAssignment.js';
 import User from './User.js';
 
 export type CleaningRequiredSlot = { key: string; label: string; ruleKey: string };
-export type CleaningSubmissionStatus = 'awaiting_upload' | 'awaiting_review' | 'approved' | 'escalated';
+export type CleaningSubmissionStatus = 'awaiting_upload' | 'awaiting_review' | 'approved' | 'escalated' | 'absent' | 'excused';
+export type CleaningAttendanceResolution = { status: 'absent' | 'excused'; reason: string; recordedBy: number; recordedAt: string };
 
 @Table({ tableName: 'cleaning_submissions', modelName: 'CleaningSubmission', timestamps: true, underscored: true })
 export default class CleaningSubmission extends Model {
@@ -19,6 +20,7 @@ export default class CleaningSubmission extends Model {
   @AllowNull(false) @Default({}) @Column({ field: 'schedule_snapshot', type: DataType.JSONB }) declare scheduleSnapshot: Record<string, unknown>;
   @AllowNull(false) @Default(1) @Column(DataType.INTEGER) declare revision: number;
   @AllowNull(false) @Default('awaiting_upload') @Column(DataType.STRING(24)) declare status: CleaningSubmissionStatus;
+  @AllowNull(true) @Column({ field: 'attendance_resolution', type: DataType.JSONB }) declare attendanceResolution: CleaningAttendanceResolution | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }

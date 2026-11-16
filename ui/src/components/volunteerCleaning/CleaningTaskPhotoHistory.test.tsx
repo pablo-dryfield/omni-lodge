@@ -9,6 +9,7 @@ jest.mock("../../store/hooks", () => ({ useAppSelector: (selector: (state: unkno
 jest.mock("../../api/volunteerCleaning", () => ({
   ...jest.requireActual("../../api/volunteerCleaning"),
   useCleaningTaskHistory: jest.fn(),
+  useResolveCleaningAttendance: jest.fn(() => ({ mutateAsync: jest.fn(), isPending: false })),
 }));
 jest.mock("./CleaningPhotoPreview", () => ({
   __esModule: true,
@@ -50,8 +51,8 @@ describe("CleaningTaskPhotoHistory", () => {
   it("loads on demand and exposes approved and rejected photo versions", async () => {
     render(<MantineProvider><CleaningTaskPhotoHistory taskLogId={25} /></MantineProvider>);
     expect(api.useCleaningTaskHistory).toHaveBeenLastCalledWith(25, 44, false);
-    fireEvent.click(screen.getByRole("button", { name: "View cleaning photos" }));
-    expect(await screen.findByRole("dialog", { name: "Cleaning photo history" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cleaning photos & attendance" }));
+    expect(await screen.findByRole("dialog", { name: "Cleaning photos & attendance" })).toBeInTheDocument();
     expect(api.useCleaningTaskHistory).toHaveBeenLastCalledWith(25, 44, true);
     expect(screen.getByText("Alex Example")).toBeInTheDocument();
     expect(screen.getByText("Clean the counter again")).toBeInTheDocument();
@@ -64,7 +65,7 @@ describe("CleaningTaskPhotoHistory", () => {
 
   it("hides cached photo history after access is denied", async () => {
     const { rerender } = render(<MantineProvider><CleaningTaskPhotoHistory taskLogId={25} /></MantineProvider>);
-    fireEvent.click(screen.getByRole("button", { name: "View cleaning photos" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cleaning photos & attendance" }));
     expect(await screen.findByText("Alex Example")).toBeInTheDocument();
     (api.useCleaningTaskHistory as jest.Mock).mockReturnValue({
       data: { taskLogId: 25, submissions: [savedSubmission] }, error: { response: { status: 403, data: { message: "Cleaning access unavailable" } } },

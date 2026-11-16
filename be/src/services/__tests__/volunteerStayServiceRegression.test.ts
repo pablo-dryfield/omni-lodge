@@ -311,6 +311,13 @@ describe('volunteer stay integration regressions', () => {
     row.shiftInstance.shiftType = { id: 7, key: 'cleaning', name: 'Cleaning' } as never;
     return row;
   };
+  it('excludes excused cleaning from the target and keeps an absence as an uncompleted requirement', async () => {
+    (ShiftAssignment.findAll as jest.Mock).mockResolvedValue([cleaningShift(1), cleaningShift(2, '2026-08-21', 'excused')]);
+    expect(milestone(await report(), 'cleaning')).toMatchObject({ current: 1, target: 1, earned: true });
+    (ShiftAssignment.findAll as jest.Mock).mockResolvedValue([cleaningShift(1), cleaningShift(2, '2026-08-21', 'absent')]);
+    expect(milestone(await report(), 'cleaning')).toMatchObject({ current: 1, target: 2, earned: false });
+  });
+
   const withManagers = (rows: ReturnType<typeof shift>[], managers: Array<Record<string, unknown>>) => {
     (ShiftAssignment.findAll as jest.Mock).mockImplementation(async (options) => options.where.userId ? rows : managers);
   };

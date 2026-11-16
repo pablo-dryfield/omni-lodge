@@ -5,6 +5,7 @@ import { Op } from 'sequelize';
 import HttpError from '../errors/HttpError.js';
 import AssistantManagerTaskLog from '../models/AssistantManagerTaskLog.js';
 import AssistantManagerTaskTemplate from '../models/AssistantManagerTaskTemplate.js';
+import AuditLog from '../models/AuditLog.js';
 import ReviewArchive from '../models/ReviewArchive.js';
 import ReviewAssignment from '../models/ReviewAssignment.js';
 import ReviewCounter from '../models/ReviewCounter.js';
@@ -428,6 +429,8 @@ export const currentVolunteerAttendance = (assignment: Pick<AssignmentWithRelati
   const shift = assignment.shiftInstance;
   if (!shift || attendance.evidenceTaskLog?.id !== attendance.evidenceTaskLogId || attendance.evidenceTaskLog.taskDate !== shift.date
     || attendance.evidenceShiftInstanceId !== shift.id || attendance.evidenceShiftTypeId !== shift.shiftTypeId) return undefined;
+  if (attendance.checkKind === 'cleaning' && (attendance.evidenceTaskLog.status === 'waived'
+    || (attendance.status === 'attended' && attendance.evidenceTaskLog.status !== 'completed'))) return undefined;
   return attendance;
 };
 
@@ -692,9 +695,9 @@ const loadProgressForProfiles = async (
           model: VolunteerShiftAttendance,
           as: 'volunteerAttendance',
           required: false,
-          attributes: ['id', 'status', 'notes', 'recordedAt', 'recordedBy', 'subjectUserId', 'evidenceTaskLogId', 'evidenceShiftInstanceId', 'evidenceShiftTypeId'],
+          attributes: ['id', 'status', 'notes', 'recordedAt', 'recordedBy', 'subjectUserId', 'evidenceTaskLogId', 'evidenceShiftInstanceId', 'evidenceShiftTypeId', 'checkKind'],
           include: [{ model: User, as: 'recordedByUser', attributes: ['id', 'firstName', 'lastName', 'email'] },
-            { model: AssistantManagerTaskLog, as: 'evidenceTaskLog', required: false, attributes: ['id', 'taskDate'] }],
+            { model: AssistantManagerTaskLog, as: 'evidenceTaskLog', required: false, attributes: ['id', 'taskDate', 'status'] }],
         },
       ],
       order: [[{ model: ShiftInstance, as: 'shiftInstance' }, 'date', 'ASC']],
@@ -991,10 +994,19 @@ export const recordVolunteerAttendance = async (params: {
     transaction,
   });
   if (!created) {
-    if (attendance.evidenceTaskLogId != null) {
+    if (attendance.evidenceTaskLogId != null && attendance.checkKind !== 'cleaning') {
       throw new HttpError(409, 'This attendance is linked to a task photo. Make corrections through the attendance check in Task Planner.');
     }
+    if (attendance.checkKind === 'cleaning') {
+      await AuditLog.create({ actorId: params.actorId, action: 'cleaning.attendance_corrected', entity: 'am_task_log',
+        entityId: String(attendance.evidenceTaskLogId), metaJson: { attendanceId: attendance.id, assignmentId: assignment.id,
+          previousStatus: attendance.status, previousNotes: attendance.notes, previousRecordedBy: attendance.recordedBy,
+          previousRecordedAt: attendance.recordedAt, evidenceFileId: attendance.evidenceFileId,
+          status: params.status, notes: params.notes } }, { transaction });
+    }
     await attendance.update({
+      ...(attendance.checkKind === 'cleaning' ? { evidenceTaskLogId: null, evidenceShiftInstanceId: null,
+        evidenceShiftTypeId: null, evidenceRuleKey: null, evidenceFileId: null, checkKind: null, expectedTime: null, lateMinutes: null } : {}),
       status: params.status,
       notes: params.notes,
       recordedBy: params.actorId,
