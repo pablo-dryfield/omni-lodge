@@ -120,7 +120,8 @@ const isAttendanceResolved = (submission: CleaningSubmission) => ['absent', 'exc
 
 /** Decisions belong to the assigned review manager, never to the cleaner excusing themselves. */
 const canResolveAttendance = (context: Context) => Boolean(context.assignment)
-  && ['pending', 'missed'].includes(context.log.status) && context.log.taskDate <= today()
+  && (['pending', 'missed'].includes(context.log.status)
+    || (context.log.status === 'completed' && isAttendanceResolved(context.submission))) && context.log.taskDate <= today()
   && context.actor.actorId !== context.submission.userId
   && (isCleaningGlobalManager(context.actor)
     || (normalizeRole(context.actor.roleSlug) === 'assistantmanager' && context.log.userId === context.actor.actorId));
@@ -282,7 +283,8 @@ export const ensureCleaningSubmissionsForTaskLog = async (taskLogId: number, tra
   return existing;
 };
 
-const loadContext = async (submissionId: number, actor: CleaningActor, transaction?: Transaction, requireLive = false): Promise<Context> => {
+const loadContext = async (submissionId: number, actor: CleaningActor, transaction?: Transaction, requireLive = false,
+  allowCompletedDecision = false): Promise<Context> => {
   assertActor(actor);
   if (!positiveId(submissionId)) throw new HttpError(400, 'A valid cleaning submission is required.');
   const initial = await CleaningSubmission.findByPk(submissionId, { transaction });
@@ -308,7 +310,8 @@ const loadContext = async (submissionId: number, actor: CleaningActor, transacti
     if (canonicalSlots(slotsFor(assignment, sources)) !== canonicalSlots(submission.requiredSlots)) {
       throw new HttpError(409, 'The cleaning requirements changed. Ask a manager to review this task.');
     }
-    if (!['pending', 'missed'].includes(log.status) || log.taskDate > today()) throw new HttpError(409, 'This cleaning task is not open for changes.');
+    if ((!['pending', 'missed'].includes(log.status) && !(allowCompletedDecision && log.status === 'completed'))
+      || log.taskDate > today()) throw new HttpError(409, 'This cleaning task is not open for changes.');
     // Lock the assignment, shift and published schedule before accepting mutations; re-check after locks.
     const lockedAssignment = await ShiftAssignment.findByPk(assignment.id, { transaction, ...(transaction ? { lock: transaction.LOCK.UPDATE } : {}) });
     const lockedShift = lockedAssignment && await ShiftInstance.findByPk(lockedAssignment.shiftInstanceId, { transaction, ...(transaction ? { lock: transaction.LOCK.UPDATE } : {}) });
@@ -599,7 +602,8 @@ const completeTaskIfApproved = async (context: Pick<Context, 'log' | 'template' 
   }
   await prepareTaskCompletionPayrollMutation({ userId: log.userId, taskDate: log.taskDate, transaction });
   const existing = Array.isArray(log.meta?.evidenceItems) ? log.meta.evidenceItems : [];
-  const evidenceItems = [...existing, ...accepted.map(({ photo, submission, slot }) => ({ id: `cleaning-photo-${photo.id}`,
+  const evidenceItems = [...existing, ...accepted.filter(({ photo }) => !existing.some((item) => objectValue(item).id === `cleaning-photo-${photo.id}`))
+    .map(({ photo, submission, slot }) => ({ id: `cleaning-photo-${photo.id}`,
     ruleKey: slot.ruleKey, type: 'image', subjectUserId: submission.userId, subjectName: objectValue(submission.scheduleSnapshot).subjectName,
     fileName: photo.fileName, mimeType: photo.mimeType, fileSize: photo.fileSize, storagePath: photo.storagePath, driveFileId: photo.driveFileId,
     driveWebViewLink: photo.driveWebViewLink, uploadedAt: new Date(photo.uploadedAt).toISOString(), uploadedBy: photo.uploadedBy,
@@ -628,10 +632,19 @@ export const resolveCleaningAttendance = async (params: CleaningActor & { submis
   }
   const reason = body.reason.trim();
   const taskCompleted = await sequelize.transaction(async (transaction) => {
-    const context = await loadContext(params.submissionId, params, transaction, true);
+    const context = await loadContext(params.submissionId, params, transaction, true, true);
     if (!canResolveAttendance(context)) throw new HttpError(403, 'Only the assigned assistant manager or management can record another cleaner’s absence or excuse.');
     assertCleaningRevision(body.expectedRevision, context.submission.revision);
     const previousResolution = context.submission.attendanceResolution ?? null;
+    if (context.log.status === 'completed') {
+      await prepareTaskCompletionPayrollMutation({ userId: context.log.userId, taskDate: context.log.taskDate, transaction });
+      await AuditLog.create({ actorId: params.actorId, action: 'cleaning.task_reopened', entity: 'am_task_log', entityId: String(context.log.id),
+        metaJson: { reason, submissionId: context.submission.id, previousCompletedAt: context.log.completedAt,
+          previousWorkflow: context.log.meta[CLEANING_WORKFLOW_META_KEY] } }, { transaction });
+      await context.log.update({ status: 'pending', completedAt: null, updatedBy: params.actorId,
+        meta: { ...context.log.meta, [CLEANING_WORKFLOW_META_KEY]: { ...objectValue(context.log.meta[CLEANING_WORKFLOW_META_KEY]),
+          completedAt: null, submissionIds: [], attendanceDecisions: [] } } }, { transaction });
+    }
     if (body.decision === 'photos_required') {
       if (!isAttendanceResolved(context.submission)) throw new HttpError(409, 'This assignment already requires photos.');
       const attendance = await VolunteerShiftAttendance.findOne({ where: { shiftAssignmentId: context.assignment!.id }, transaction, lock: transaction.LOCK.UPDATE });

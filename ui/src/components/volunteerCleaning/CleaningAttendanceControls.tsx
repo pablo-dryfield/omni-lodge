@@ -45,7 +45,7 @@ export default function CleaningAttendanceControls({ submission, onChange }: { s
         <Text fw={600} size="sm" ta="center">{labels[decision]} — {submission.subjectName || `Staff #${submission.userId}`}</Text>
         <Textarea label="Reason" required maxLength={2000} autosize minRows={2} value={reason}
           disabled={mutation.isPending} onChange={(event) => setReason(event.currentTarget.value)} />
-        <Text size="xs" c="dimmed" ta="center">This decision updates attendance and is recorded in the task history.</Text>
+        <Text size="xs" c="dimmed" ta="center">This decision updates attendance and is recorded in the task history. Restoring missing photos reopens a completed task.</Text>
         <Group grow><Button variant="default" disabled={mutation.isPending} onClick={() => { setDecision(null); setError(null); }}>Cancel</Button>
           <Button color={decision === "absent" ? "red" : "blue"} loading={mutation.isPending} disabled={!reason.trim()} onClick={() => void save()}>Save attendance</Button></Group>
       </Stack></Paper>}

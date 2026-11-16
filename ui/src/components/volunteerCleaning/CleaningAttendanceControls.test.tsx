@@ -38,7 +38,7 @@ it("shows excused history with no photo requirement and supports restoring photo
   fireEvent.click(screen.getByRole("button", { name: "Require photos" }));
   expect(screen.getByRole("textbox", { name: "Reason" })).toBeInTheDocument();
 });
-it("does not expose attendance actions to a cleaner or closed task", () => {
+it("does not expose attendance actions without authorization", () => {
   show({ ...submission, canResolveAttendance: false });
   expect(screen.queryByRole("button", { name: "Absent" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Excused" })).not.toBeInTheDocument();

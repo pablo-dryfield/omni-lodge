@@ -173,6 +173,29 @@ describe('assignment-scoped cleaning workflow', () => {
     expect(attendanceRows).toHaveLength(0); expect(sub.status).toBe('awaiting_review');
     expect(actions[0].status).toBe(true); expect(sub.attendanceResolution).toBeNull();
   });
+  it('restores missing photo requirements after an absence completed the task, then records attendance on approval', async () => {
+    const sub = await materialize(); await decideAttendance(sub, 'absent'); expect(log.status).toBe('completed');
+    expect((await getCleaningSubmission(sub.id, manager)).submission.canResolveAttendance).toBe(true);
+    await decideAttendance(sub, 'photos_required', manager, 'Returned and completed the cleaning');
+    expect(log.status).toBe('pending'); expect(log.completedAt).toBeNull(); expect(attendanceRows).toHaveLength(0);
+    await upload(sub); await review(sub);
+    expect(log.status).toBe('completed'); expect(attendanceRows[0].status).toBe('attended');
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ action: 'cleaning.task_reopened',
+      metaJson: expect.objectContaining({ reason: 'Returned and completed the cleaning' }) }), { transaction: tx });
+  });
+  it('checks frozen payroll before changing a closed absence decision', async () => {
+    const sub = await materialize(); await decideAttendance(sub, 'absent');
+    (prepareTaskCompletionPayrollMutation as jest.Mock).mockRejectedValueOnce(new HttpError(409, 'Reconcile settled compensation'));
+    await expect(decideAttendance(sub, 'photos_required')).rejects.toMatchObject({ status: 409 });
+    expect(sub.status).toBe('absent'); expect(log.status).toBe('completed'); expect(attendanceRows[0].status).toBe('absent');
+  });
+  it('can correct a closed absence to excused while preserving other cleaners? evidence without duplicates', async () => {
+    rows.push(assignment(13, 8, 7)); const sub = await materialize(); await upload(sub); await review(sub);
+    await decideAttendance(submissions[1], 'absent'); expect(log.status).toBe('completed');
+    await decideAttendance(submissions[1], 'excused', manager, 'Absence approved afterwards');
+    expect(log.status).toBe('completed'); expect(log.meta.evidenceItems).toHaveLength(1);
+    expect(attendanceRows.find((r) => r.subjectUserId === 8).status).toBe('excused');
+  });
   it('completes a mixed approved/absent/excused roster and credits only real approved cleaning', async () => {
     rows.push(assignment(13, 8, 7), assignment(14, 10, 7)); const sub = await materialize(); await upload(sub); await review(sub);
     expect(log.status).toBe('pending'); expect(attendanceRows).toHaveLength(0);
