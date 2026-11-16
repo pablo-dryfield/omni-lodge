@@ -39,6 +39,8 @@ export type CleaningSubmission = {
   reviewerMissing: boolean;
   canUpload: boolean;
   canReview: boolean;
+  canResolveAttendance?: boolean;
+  attendanceResolution?: { status: "absent" | "excused"; reason: string; recordedBy: number; recordedAt: string } | null;
   escalationReason?: string | null;
   slots: CleaningPhotoSlot[];
 };
@@ -165,6 +167,13 @@ export const waiveCanceledCleaningTask = async ({
   const response = await axiosInstance.post<{ taskLogId: number; status: "waived" }>(`/cleaningSubmissions/tasks/${taskLogId}/waive`, body);
   return response.data;
 };
+export type CleaningAttendanceDecision = "absent" | "excused" | "photos_required";
+export const resolveCleaningAttendance = async ({
+  submissionId, ...body
+}: { submissionId: number; expectedRevision: number; decision: CleaningAttendanceDecision; reason: string }): Promise<CleaningResponse> => {
+  const response = await axiosInstance.patch<CleaningResponse>(`/cleaningSubmissions/${submissionId}/attendance`, body);
+  return response.data;
+};
 
 const useCleaningInvalidation = (userId: number) => {
   const queryClient = useQueryClient();
@@ -190,5 +199,10 @@ export const useReviewCleaningPhoto = (userId: number) => {
 export const useWaiveCanceledCleaningTask = (userId: number) => {
   const invalidate = useCleaningInvalidation(userId);
   return useMutation({ mutationFn: waiveCanceledCleaningTask, onSuccess: async () => { await invalidate(); },
+    onError: async (error: CleaningError) => { if (error.response?.status === 409) await invalidate(); } });
+};
+export const useResolveCleaningAttendance = (userId: number) => {
+  const invalidate = useCleaningInvalidation(userId);
+  return useMutation({ mutationFn: resolveCleaningAttendance, onSuccess: invalidate,
     onError: async (error: CleaningError) => { if (error.response?.status === 409) await invalidate(); } });
 };

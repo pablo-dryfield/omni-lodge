@@ -40,7 +40,7 @@ const HomeCleaningTasks = () => {
       <Button size="xs" variant="subtle" onClick={() => void query.refetch()} disabled={query.isFetching} loading={query.isFetching}>Retry cleaning refresh</Button>
     </Stack>
   </Alert> : null;
-  const own = query.data?.submissions.filter((submission) => submission.status !== "approved") ?? [];
+  const own = query.data?.submissions.filter((submission) => !["approved", "absent", "excused"].includes(submission.status)) ?? [];
   const reviews = query.data?.reviewSubmissions ?? [];
   const issues = query.data?.taskIssues ?? [];
   const selected = query.data?.submissions.find((submission) => submission.id === selection?.id);

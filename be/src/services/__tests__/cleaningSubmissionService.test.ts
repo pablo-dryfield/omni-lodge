@@ -10,7 +10,7 @@ jest.mock('../../models/ShiftAssignment.js', () => ({ __esModule: true, default:
 jest.mock('../../models/ShiftInstance.js', () => ({ __esModule: true, default: { findByPk: jest.fn(), findAll: jest.fn() } }));
 jest.mock('../../models/ShiftRole.js', () => ({ __esModule: true, default: {} }));
 jest.mock('../../models/ShiftType.js', () => ({ __esModule: true, default: {} }));
-jest.mock('../../models/VolunteerShiftAttendance.js', () => ({ __esModule: true, default: { findAll: jest.fn(), destroy: jest.fn() } }));
+jest.mock('../../models/VolunteerShiftAttendance.js', () => ({ __esModule: true, default: { findAll: jest.fn(), destroy: jest.fn(), findOrCreate: jest.fn(), findOne: jest.fn() } }));
 jest.mock('../taskCompletionPayrollService.js', () => ({ prepareTaskCompletionPayrollMutation: jest.fn() }));
 jest.mock('../cleaningPhotoValidationService.js', () => ({ normalizeCleaningPhoto: jest.fn() }));
 jest.mock('../assistantManagerTaskEvidenceStorageService.js', () => ({ storeAssistantManagerTaskEvidenceImage: jest.fn(),
@@ -37,7 +37,7 @@ import { deleteAssistantManagerTaskEvidenceImage, openAssistantManagerTaskEviden
 import { assertCleaningEvidencePreserved, assertCleaningTaskLogMutable, ensureCleaningSubmissionsForTaskLog,
   getCleaningPhotoStream, getCleaningReviewActionPayload, getCleaningSubmission, getCleaningTaskHistory, isCleaningTaskCompletionManaged,
   listMyCleaningSubmissions, prepareCleaningTaskLogDeletion, reviewCleaningSubmissionPhoto, uploadCleaningSubmissionPhoto,
-  waiveCanceledCleaningTask } from '../cleaningSubmissionService.js';
+  resolveCleaningAttendance, waiveCanceledCleaningTask } from '../cleaningSubmissionService.js';
 
 const tx = { LOCK: { UPDATE: 'UPDATE', SHARE: 'SHARE' } };
 const userModel = Object.assign(UserStub, { findAll: jest.fn(), findByPk: jest.fn() });
@@ -63,6 +63,7 @@ let submissions: any[];
 let photos: any[];
 let actions: any[];
 let nextPhotoId: number;
+let attendanceRows: any[];
 const materialize = async () => { await ensureCleaningSubmissionsForTaskLog(1); return submissions[0]; };
 const upload = async (submission: any, actor = volunteer) => uploadCleaningSubmissionPhoto({ ...actor, submissionId: submission.id,
   slotKey: 'house-1', expectedRevision: submission.revision, data: Buffer.from('image') });
@@ -77,7 +78,7 @@ describe('assignment-scoped cleaning workflow', () => {
     log = record({ id: 1, templateId: 4, userId: 9, taskDate: '2026-09-07', status: 'pending', meta: {}, updatedAt: new Date() });
     template = record({ id: 4, name: 'House cleaning', scheduleConfig: config });
     rows = [assignment(11, 7, 7), assignment(12, 9, 1, 'manager')];
-    submissions = []; photos = []; actions = []; nextPhotoId = 100;
+    submissions = []; photos = []; actions = []; attendanceRows = []; nextPhotoId = 100;
     (sequelize.transaction as jest.Mock).mockImplementation(async (...args) => args.at(-1)(tx));
     (AssistantManagerTaskLog.findByPk as jest.Mock).mockResolvedValue(log);
     (AssistantManagerTaskLog.findAll as jest.Mock).mockResolvedValue([Object.assign(log, { template })]);
@@ -113,6 +114,14 @@ describe('assignment-scoped cleaning workflow', () => {
     (ScheduleWeek.findByPk as jest.Mock).mockResolvedValue({ id: 10, state: 'published' });
     (VolunteerShiftAttendance.findAll as jest.Mock).mockResolvedValue([]);
     (VolunteerShiftAttendance.destroy as jest.Mock).mockResolvedValue(0);
+    (VolunteerShiftAttendance.findOne as jest.Mock).mockImplementation(async ({ where }) => attendanceRows.find((r) => r.shiftAssignmentId === where.shiftAssignmentId) ?? null);
+    (VolunteerShiftAttendance.findOrCreate as jest.Mock).mockImplementation(async ({ where, defaults }) => {
+      const existing = attendanceRows.find((r) => r.shiftAssignmentId === where.shiftAssignmentId);
+      if (existing) return [existing, false];
+      const row = record({ id: attendanceRows.length + 1, ...defaults });
+      row.destroy = jest.fn(async () => { attendanceRows = attendanceRows.filter((r) => r !== row); });
+      attendanceRows.push(row); return [row, true];
+    });
     userModel.findAll.mockImplementation(async (options) => options?.include
       ? [{ id: 99, role: { slug: 'owner' } }] : [{ id: 9, firstName: 'Manager', lastName: 'Surname' }]);
     userModel.findByPk.mockImplementation(async (id) => ({ id, status: true, approved: true,
@@ -124,6 +133,97 @@ describe('assignment-scoped cleaning workflow', () => {
     (openAssistantManagerTaskEvidenceImageStream as jest.Mock).mockResolvedValue({ stream: {}, mimeType: 'image/jpeg' });
   });
   afterEach(() => jest.useRealTimers());
+
+  const decideAttendance = (sub: any, decision: string, actor = manager, reason = 'Unwell today') => resolveCleaningAttendance({
+    ...actor, submissionId: sub.id, body: { expectedRevision: sub.revision, decision, reason } });
+
+  it('records on-time attendance for the actual cleaner only once all photos complete the task', async () => {
+    const sub = await materialize(); await upload(sub);
+    expect(attendanceRows).toHaveLength(0);
+    await review(sub, 'rejected', manager, { reason: 'Retake' }); expect(attendanceRows).toHaveLength(0);
+    await upload(sub); await review(sub);
+    expect(log.status).toBe('completed');
+    expect(attendanceRows).toEqual([expect.objectContaining({ shiftAssignmentId: 11, subjectUserId: 7,
+      status: 'attended', checkKind: 'cleaning', evidenceTaskLogId: 1, evidenceShiftInstanceId: 50,
+      evidenceShiftTypeId: 7, expectedTime: '18:00', lateMinutes: 0 })]);
+    await ensureCleaningSubmissionsForTaskLog(1); expect(attendanceRows).toHaveLength(1);
+  });
+  it.each(['attended', 'late', 'absent', 'excused'])('preserves existing manual %s attendance on photo approval', async (status) => {
+    const row = record({ shiftAssignmentId: 11, subjectUserId: 7, status, notes: 'Manual decision', checkKind: null });
+    attendanceRows.push(row); const sub = await materialize(); await upload(sub); await review(sub);
+    expect(row.update).not.toHaveBeenCalled(); expect(row.status).toBe(status);
+  });
+  it.each(['absent', 'excused'])('resolves a missing-photo assignment as %s and completes the task without evidence', async (decision) => {
+    const sub = await materialize(); const result = await decideAttendance(sub, decision);
+    expect(result.taskCompleted).toBe(true); expect(log.status).toBe('completed');
+    expect(sub).toMatchObject({ status: decision, attendanceResolution: { status: decision, reason: 'Unwell today', recordedBy: 9 } });
+    expect(attendanceRows[0]).toMatchObject({ status: decision, subjectUserId: 7, shiftAssignmentId: 11 });
+    expect(log.meta.evidenceItems).toEqual([]); expect(photos).toHaveLength(0);
+    expect(result.submission).toMatchObject({ canUpload: false, canReview: false });
+  });
+  it('keeps other cleaners pending, deactivates review popups, preserves uploaded photos and can restore requirements', async () => {
+    rows.push(assignment(13, 8, 7)); const sub = await materialize(); await upload(sub);
+    await decideAttendance(sub, 'excused');
+    expect(log.status).toBe('pending'); expect(actions[0].status).toBe(false);
+    expect(photos).toHaveLength(1);
+    await expect(upload(sub)).rejects.toMatchObject({ status: 409 });
+    await expect(review(sub)).rejects.toMatchObject({ status: 403 });
+    await ensureCleaningSubmissionsForTaskLog(1); expect(sub.status).toBe('excused');
+    await decideAttendance(sub, 'photos_required', manager, 'Returned to work');
+    expect(attendanceRows).toHaveLength(0); expect(sub.status).toBe('awaiting_review');
+    expect(actions[0].status).toBe(true); expect(sub.attendanceResolution).toBeNull();
+  });
+  it('completes a mixed approved/absent/excused roster and credits only real approved cleaning', async () => {
+    rows.push(assignment(13, 8, 7), assignment(14, 10, 7)); const sub = await materialize(); await upload(sub); await review(sub);
+    expect(log.status).toBe('pending'); expect(attendanceRows).toHaveLength(0);
+    await decideAttendance(submissions[1], 'absent'); await decideAttendance(submissions[2], 'excused');
+    expect(log.status).toBe('completed'); expect(log.meta.evidenceItems).toHaveLength(1);
+    expect(attendanceRows.map((r) => r.status).sort()).toEqual(['absent', 'attended', 'excused']);
+  });
+  it.each([
+    ['cleaner', volunteer], ['unassigned assistant manager', { actorId: 8, roleSlug: 'assistant-manager' }],
+    ['ordinary task owner', { actorId: 9, roleSlug: 'guide' }],
+  ])('rejects attendance decisions by %s', async (_, actor) => {
+    const sub = await materialize(); await expect(decideAttendance(sub, 'excused', actor)).rejects.toMatchObject({ status: expect.any(Number) });
+    expect(attendanceRows).toHaveLength(0);
+  });
+  it('rejects self-excusal even for the assigned assistant manager', async () => {
+    rows = [assignment(11, 9, 7)]; const sub = await materialize();
+    await expect(decideAttendance(sub, 'excused')).rejects.toMatchObject({ status: 403 });
+  });
+  it('requires a reason, current revision and a published live assignment', async () => {
+    const sub = await materialize(); await expect(decideAttendance(sub, 'absent', manager, '  ')).rejects.toMatchObject({ status: 400 });
+    await expect(resolveCleaningAttendance({ ...manager, submissionId: sub.id,
+      body: { expectedRevision: sub.revision + 1, decision: 'absent', reason: 'Unwell' } })).rejects.toMatchObject({ status: 409 });
+    rows[0].userId = 8; await expect(decideAttendance(sub, 'absent')).rejects.toMatchObject({ status: 409 });
+    expect(attendanceRows).toHaveLength(0);
+  });
+  it('does not replace attendance proof belonging to another task', async () => {
+    attendanceRows.push(record({ shiftAssignmentId: 11, subjectUserId: 7, status: 'late',
+      evidenceTaskLogId: 25, checkKind: 'meeting_point', evidenceFileId: 'proof' }));
+    const sub = await materialize();
+    await expect(decideAttendance(sub, 'absent')).rejects.toMatchObject({ status: 409 });
+    expect(attendanceRows[0].update).not.toHaveBeenCalled(); expect(sub.status).toBe('awaiting_upload');
+  });
+  it('records and retains the previous manual decision when management explicitly changes it', async () => {
+    attendanceRows.push(record({ shiftAssignmentId: 11, subjectUserId: 7, status: 'attended', notes: 'Earlier confirmation',
+      recordedBy: 99, revision: 3, checkKind: null, evidenceTaskLogId: null }));
+    const sub = await materialize(); await decideAttendance(sub, 'absent');
+    expect(attendanceRows[0]).toMatchObject({ status: 'absent', revision: 4 });
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ action: 'cleaning.attendance_replaced',
+      metaJson: expect.objectContaining({ previousStatus: 'attended', previousNotes: 'Earlier confirmation', previousRecordedBy: 99 }) }), { transaction: tx });
+  });
+  it('lets the task planner initialize today?s missing submissions without requiring an upload first', async () => {
+    expect(submissions).toHaveLength(0);
+    const history = await getCleaningTaskHistory(1, manager);
+    expect(history.submissions).toHaveLength(1); expect(history.submissions[0].canResolveAttendance).toBe(true);
+  });
+
+  it('allows a global manager to resolve another cleaner, with an audit reason', async () => {
+    const sub = await materialize(); await decideAttendance(sub, 'excused', owner);
+    expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ actorId: 99,
+      action: 'cleaning.attendance_resolved', metaJson: expect.objectContaining({ decision: 'excused', reason: 'Unwell today' }) }), { transaction: tx });
+  });
 
   it('creates only actual published assignment slots and is idempotent across page reloads', async () => {
     await materialize(); await ensureCleaningSubmissionsForTaskLog(1);

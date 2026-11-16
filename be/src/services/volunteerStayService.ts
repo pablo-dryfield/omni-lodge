@@ -281,7 +281,7 @@ const loadEvidence = async (stays: VolunteerStay[], today: string, transaction?:
         ],
       }, { model: VolunteerShiftAttendance, as: 'volunteerAttendance', required: false,
         include: [{ model: User, as: 'recordedByUser', attributes: ['id', 'firstName', 'lastName', 'email'] },
-          { model: AssistantManagerTaskLog, as: 'evidenceTaskLog', required: false, attributes: ['id', 'taskDate'] }],
+          { model: AssistantManagerTaskLog, as: 'evidenceTaskLog', required: false, attributes: ['id', 'taskDate', 'status'] }],
       }],
       transaction,
     }) as Promise<ShiftRecord[]>,
@@ -303,7 +303,7 @@ const loadEvidence = async (stays: VolunteerStay[], today: string, transaction?:
   const cleaningSubmissions = assignments.length ? await CleaningSubmission.findAll({
     where: { shiftAssignmentId: { [Op.in]: assignments.map((assignment) => assignment.id) } },
     attributes: ['id', 'taskLogId', 'shiftAssignmentId', 'userId', 'status', 'scheduleSnapshot', 'updatedAt'], transaction,
-    include: [{ model: AssistantManagerTaskLog, as: 'taskLog', required: true, attributes: ['id', 'taskDate'] }],
+    include: [{ model: AssistantManagerTaskLog, as: 'taskLog', required: true, attributes: ['id', 'taskDate', 'status'] }],
   }) : [];
   const sharedShiftIds = [...new Set(assignments.map((assignment) => assignment.shiftInstanceId))];
   const managers = sharedShiftIds.length ? await ShiftAssignment.findAll({

@@ -6,6 +6,7 @@ jest.mock('../../controllers/cleaningSubmissionController.js', () => ({
   getCleaningSubmissionDetail: (_req: any, res: any) => res.json({}),
   getCleaningTaskPhotoHistory: (_req: any, res: any) => res.json({ taskLogId: Number(_req.params.taskLogId), submissions: [] }),
   patchCleaningPhotoReview: (_req: any, res: any) => res.json({}),
+  patchCleaningAttendance: (req: any, res: any) => res.json({ submissionId: Number(req.params.submissionId), actorId: req.authContext.id, decision: req.body.decision }),
   streamCleaningPhoto: (_req: any, res: any) => res.json({}),
   postWaiveCanceledCleaningTask: (_req: any, res: any) => res.json({ status: 'waived' }),
   postCleaningPhoto: (req: any, res: any) => res.json({ field: req.file?.fieldname, bytes: req.file?.buffer?.length, revision: req.body.expectedRevision }),
@@ -13,9 +14,14 @@ jest.mock('../../controllers/cleaningSubmissionController.js', () => ({
 import express from 'express';
 import request from 'supertest';
 import router from '../cleaningSubmissionRoutes.js';
-const app = express(); app.use('/api/cleaningSubmissions', router);
+const app = express(); app.use(express.json()); app.use('/api/cleaningSubmissions', router);
 const route = '/api/cleaningSubmissions/1/slots/house-1/photos';
 describe('real multer cleaning photo multipart parser', () => {
+  it('routes an authenticated attendance decision independently of photo uploads', async () => {
+    const result = await request(app).patch('/api/cleaningSubmissions/12/attendance')
+      .send({ decision: 'excused', reason: 'Approved leave', expectedRevision: 3 });
+    expect(result.status).toBe(200); expect(result.body).toEqual({ submissionId: 12, actorId: 7, decision: 'excused' });
+  });
   it('accepts exactly the file plus expectedRevision sent by the UI', async () => {
     const result = await request(app).post(route).field('expectedRevision', '3').attach('file', Buffer.from('photo'), 'photo.jpg');
     expect(result.status).toBe(200); expect(result.body).toEqual({ field: 'file', bytes: 5, revision: '3' });

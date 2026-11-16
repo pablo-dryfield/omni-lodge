@@ -3,7 +3,7 @@ import HttpError from '../errors/HttpError.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import logger from '../utils/logger.js';
 import { getCleaningPhotoStream, getCleaningSubmission, getCleaningTaskHistory, listMyCleaningSubmissions, reviewCleaningSubmissionPhoto,
-  uploadCleaningSubmissionPhoto, waiveCanceledCleaningTask } from '../services/cleaningSubmissionService.js';
+  uploadCleaningSubmissionPhoto, waiveCanceledCleaningTask, resolveCleaningAttendance } from '../services/cleaningSubmissionService.js';
 
 const actor = (req: AuthenticatedRequest) => {
   if (!req.authContext?.id) throw new HttpError(401, 'Authentication is required.');
@@ -48,6 +48,10 @@ export const patchCleaningPhotoReview = async (req: AuthenticatedRequest, res: R
 };
 export const postWaiveCanceledCleaningTask = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try { res.json(await waiveCanceledCleaningTask({ ...actor(req), taskLogId: id(req.params.taskLogId), body: req.body })); }
+  catch (error) { errorResponse(res, error); }
+};
+export const patchCleaningAttendance = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try { res.json(await resolveCleaningAttendance({ ...actor(req), submissionId: id(req.params.submissionId), body: req.body })); }
   catch (error) { errorResponse(res, error); }
 };
 export const streamCleaningPhoto = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

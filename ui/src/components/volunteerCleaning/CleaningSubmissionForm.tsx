@@ -90,6 +90,10 @@ const CleaningSubmissionForm = ({ submission }: { submission: CleaningSubmission
     }
   };
 
+  if (snapshot.attendanceResolution) return <Alert color={snapshot.status === "excused" ? "blue" : "red"} title={snapshot.status === "excused" ? "Excused" : "Absent"}>
+    {snapshot.attendanceResolution.reason} No cleaning photo is required.
+  </Alert>;
+
   return <Stack gap="md">
     <Text size="sm" c="dimmed">{snapshot.taskDate} · {snapshot.shiftName}</Text>
     <Text size="sm">Add a clear photo for each item. Approved photos are kept; only missing or rejected photos can be uploaded.</Text>

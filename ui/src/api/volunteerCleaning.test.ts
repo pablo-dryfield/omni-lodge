@@ -1,5 +1,5 @@
 import axiosInstance from "../utils/axiosInstance";
-import { cleaningKeys, fetchCleaningPhoto, fetchCleaningSubmission, fetchCleaningTaskHistory, fetchMyCleaningSubmissions, getCleaningError, isTransientCleaningQueryError, reviewCleaningPhoto, uploadCleaningPhoto, waiveCanceledCleaningTask } from "./volunteerCleaning";
+import { cleaningKeys, fetchCleaningPhoto, fetchCleaningSubmission, fetchCleaningTaskHistory, fetchMyCleaningSubmissions, getCleaningError, isTransientCleaningQueryError, resolveCleaningAttendance, reviewCleaningPhoto, uploadCleaningPhoto, waiveCanceledCleaningTask } from "./volunteerCleaning";
 
 jest.mock("../utils/axiosInstance", () => ({ __esModule: true, default: { get: jest.fn(), post: jest.fn(), patch: jest.fn() } }));
 const get = axiosInstance.get as jest.Mock;
@@ -38,6 +38,11 @@ describe("Cleaning API", () => {
     expect(form.get("file")).toBe(file);
     expect(form.get("expectedRevision")).toBe("4");
     expect(options).toBeUndefined();
+  });
+  it("records reasoned attendance decisions against the current submission revision", async () => {
+    patch.mockResolvedValue({ data: { submission: { id: 2, status: "excused" }, taskCompleted: true } });
+    expect(await resolveCleaningAttendance({ submissionId: 2, expectedRevision: 5, decision: "excused", reason: "Approved leave" })).toMatchObject({ taskCompleted: true });
+    expect(patch).toHaveBeenCalledWith("/cleaningSubmissions/2/attendance", { expectedRevision: 5, decision: "excused", reason: "Approved leave" });
   });
   it("uses the review workflow with separate rejection and escalation reasons", async () => {
     patch.mockResolvedValue({ data: {} });

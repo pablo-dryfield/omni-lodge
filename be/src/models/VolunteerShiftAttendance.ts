@@ -68,7 +68,7 @@ export default class VolunteerShiftAttendance extends Model {
   @AllowNull(true) @Column({ field: 'evidence_file_id', type: DataType.STRING(255) })
   declare evidenceFileId: string | null;
   @AllowNull(true) @Column({ field: 'check_kind', type: DataType.STRING(32) })
-  declare checkKind: 'meeting_point' | 'promotion_chat' | null;
+  declare checkKind: 'meeting_point' | 'promotion_chat' | 'cleaning' | null;
   @AllowNull(true) @Column({ field: 'expected_time', type: DataType.STRING(5) })
   declare expectedTime: string | null;
   @AllowNull(true) @Column({ field: 'late_minutes', type: DataType.INTEGER })

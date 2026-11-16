@@ -11438,14 +11438,16 @@ const AssistantManagerTaskPlanner = () => {
                 <Stack gap="sm">
                   <Text size="sm">
                     Staff upload their assigned photos from Cleaning on the homepage. Managers review
-                    those photos there. This task completes automatically once everyone's required
-                    photos are approved. Its assignee, date, time, evidence, and status are locked
+                    those photos there. Use Cleaning photos & attendance to mark a cleaner Absent or
+                    Excused with a reason when no photo is expected. The task completes once everyone
+                    has approved photos or an attendance decision. Approved cleaning records attendance
+                    as on time after task completion. Its assignee, date, time, evidence, and status are locked
                     to the cleaning workflow and cannot be changed here. An authorized manager can
                     permanently delete the task, including every cleaning photo, attendance record,
                     submission, and stored evidence file. Comments are still available.
                   </Text>
                   <Group justify="center" wrap="wrap">
-                    {selectedLog ? <CleaningTaskPhotoHistory taskLogId={selectedLog.id} /> : null}
+                    {selectedLog ? <CleaningTaskPhotoHistory taskLogId={selectedLog.id} onChange={refreshLogs} /> : null}
                     <Button component={Link} to="/" variant="default" size="sm">Open homepage cleaning</Button>
                   </Group>
                 </Stack>
