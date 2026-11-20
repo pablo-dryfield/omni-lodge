@@ -95,11 +95,51 @@ it.each(['viator', 'getyourguide', 'rezdy', 'fareharbor', 'freetour', 'airbnb', 
     expect(axiosInstance.post).not.toHaveBeenCalled();
   },
 );
-it.each(['food-tour-guide', 'assistant-manager', 'unrelated-role'])('does not expose privileged local actions to scoped %s', async role => {
+it.each(['food-tour-guide', 'unrelated-role'])('does not expose privileged local actions to scoped %s', async role => {
   mockRoleSlug = role;
   const actions = await openBookingActions(order({ platform: 'viator' }));
   expect(within(actions).queryByRole('button', { name: 'Force cancel' })).not.toBeInTheDocument();
   expect(within(actions).queryByRole('button', { name: 'Force amend' })).not.toBeInTheDocument();
+});
+it.each(['viator', 'getyourguide', 'rezdy', 'fareharbor', 'freetour', 'airbnb', 'xperiencepoland', 'civitatis'])(
+  'offers assistant managers the audited force actions for %s', async platform => {
+    mockRoleSlug = 'assistant-manager'; mockProductScope = null;
+    const actions = await openBookingActions(order({ platform }));
+    expect(within(actions).getByRole('button', { name: 'Force amend', exact: true })).toBeEnabled();
+    expect(within(actions).getByRole('button', { name: 'Force cancel', exact: true })).toBeEnabled();
+    expect(axiosInstance.post).not.toHaveBeenCalled();
+  },
+);
+it.each(['direct', 'omnilodge', 'ecwid'])(
+  'offers assistant managers the payment-aware actions for %s', async platform => {
+    mockRoleSlug = 'assistant-manager'; mockProductScope = null;
+    const actions = await openBookingActions(order({ platform }));
+    for (const name of ['Amend', 'Cancel', 'Partial Refund']) {
+      expect(within(actions).getByRole('button', { name, exact: true })).toBeEnabled();
+    }
+    expect(axiosInstance.post).not.toHaveBeenCalled();
+  },
+);
+it('retains the assistant manager booking-update permission check for force actions', async () => {
+  mockRoleSlug = 'assistant-manager'; mockProductScope = null; mockCanUpdate = false;
+  const actions = await openBookingActions(order({ platform: 'viator' }));
+  expect(within(actions).queryByRole('button', { name: 'Force amend' })).not.toBeInTheDocument();
+  expect(within(actions).queryByRole('button', { name: 'Force cancel' })).not.toBeInTheDocument();
+});
+it('submits an assistant manager product amendment without sending an unrequested customer email', async () => {
+  mockRoleSlug = 'assistant-manager'; mockProductScope = null;
+  const actions = await openBookingActions(order({ platform: 'omnilodge' }));
+  fireEvent.click(within(actions).getByRole('button', { name: 'Amend', exact: true }));
+  const modal = await screen.findByRole('dialog', { name: 'Amend booking ftk_test' });
+  const product = within(modal).getByLabelText('Product');
+  await waitFor(() => expect(product).toHaveValue('Food Tour Krakow'));
+  fireEvent.click(within(modal).getByRole('checkbox', { name: 'Notify customer' }));
+  fireEvent.click(product);
+  fireEvent.click(await screen.findByRole('option', { name: 'Late Night Bites', hidden: true }));
+  fireEvent.click(within(modal).getByRole('button', { name: 'Save Changes', exact: true }));
+  await waitFor(() => expect(axiosInstance.post).toHaveBeenCalledWith('/bookings/99/direct-actions/amend', {
+    productId: 50, pickupDate: '2027-01-10', pickupTime: '14:00', sendCustomerEmail: false,
+  }));
 });
 it('retains integrated Ecwid controls alongside the explicit local correction controls for global managers', async () => {
   mockRoleSlug = 'manager'; mockProductScope = null;

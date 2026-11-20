@@ -335,6 +335,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   'assistant-manager': {
     'dashboard-overview': ['view'],
     'booking-management': ['view', 'create', 'update'],
+    'bank-transfer-booking-management': ['view', 'update'],
     'booking-manifest': ['view'],
       reporting: ['view'],
       'open-bar-control-console': ['view', 'create', 'update', 'delete'],

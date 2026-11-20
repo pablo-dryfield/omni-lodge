@@ -27,11 +27,11 @@ it.each(['viator', 'rezdy', 'getyourguide', 'freetour', 'civitatis', 'fareharbor
     expect(isLocalActionPlatform(platform)).toBe(true);
     await expect(assertLocalBookingActionAccess(req, { ...booking, platform } as Booking)).resolves.toBe('STOREFRONT');
   });
-it.each(['owner', 'admin', 'administrator', 'manager', 'mgr'])('permits current global management role %s', async slug => {
+it.each(['owner', 'admin', 'administrator', 'manager', 'mgr', 'assistant-manager', 'assistant_manager', 'Assistant Manager', 'assistmanager'])('permits current global management role %s', async slug => {
   roleModel.findByPk.mockResolvedValue({ slug, status: true } as UserType);
   await expect(assertLocalBookingActionAccess(req, booking)).resolves.toBe('STOREFRONT');
 });
-it.each(['guide', 'assistant-manager', 'food-tour-owner', 'food-tour-manager', 'unrelated'])(
+it.each(['guide', 'food-tour-owner', 'food-tour-manager', 'unrelated'])(
   'does not turn a global %s into an unrestricted manager', async slug => {
     roleModel.findByPk.mockResolvedValue({ slug, status: true } as UserType);
     await expect(assertLocalBookingActionAccess(req, booking)).rejects.toMatchObject({ status: 403 });
@@ -50,6 +50,22 @@ it.each(['food-tour-owner', 'food-tour-manager'])('allows scoped %s only on actu
   jest.mocked(Product.findByPk).mockResolvedValue({ id: 9, productTypeId: 1 } as Product);
   await expect(assertLocalBookingActionAccess(req, booking)).rejects.toMatchObject({ status: 403 });
 });
+it('allows assistant managers only within their configured product types', async () => {
+  roleModel.findByPk.mockResolvedValue({ slug: 'assistant-manager', status: true } as UserType);
+  jest.mocked(getAllowedProductTypeIds).mockResolvedValue([1, 3]);
+  await expect(assertLocalBookingActionAccess(req, booking)).resolves.toBe('STOREFRONT');
+  jest.mocked(Product.findByPk).mockResolvedValue({ id: 9, productTypeId: 4 } as Product);
+  await expect(assertLocalBookingActionAccess(req, booking)).rejects.toMatchObject({ status: 403 });
+  jest.mocked(Product.findByPk).mockResolvedValue(null);
+  await expect(assertLocalBookingActionAccess(req, booking)).rejects.toMatchObject({ status: 403 });
+});
+it.each([{ permission: false, active: true }, { permission: true, active: false }])(
+  'rejects assistant manager access when permission or role is inactive: %j', async ({ permission, active }) => {
+    roleModel.findByPk.mockResolvedValue({ slug: 'assistant-manager', status: active } as UserType);
+    jest.mocked(hasModuleActionPermission).mockResolvedValue(permission);
+    await expect(assertLocalBookingActionAccess(req, booking)).rejects.toMatchObject({ status: 403 });
+  },
+);
 it('fails closed for inactive roles, missing permission, missing products, and mixed scopes', async () => {
   jest.mocked(hasModuleActionPermission).mockResolvedValue(false);
   await expect(assertLocalBookingActionAccess(req, booking)).rejects.toMatchObject({ status: 403 });

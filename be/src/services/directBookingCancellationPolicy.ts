@@ -6,6 +6,7 @@ import HttpError from '../errors/HttpError.js';
 import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { hasModuleActionPermission } from '../middleware/authorizationMiddleware.js';
 import { getAllowedProductTypeIds } from './productScopeService.js';
+import { assertBookingManagementAccess, isAssistantManagerBookingRole } from './localBookingActionPolicy.js';
 
 /** Cancellation follows the Direct channel, never words in the product title. */
 export const isDirectBooking = (booking: Pick<Booking, 'platform'>): boolean =>
@@ -16,6 +17,12 @@ export async function assertDirectBookingCancellationAccess(
   booking: Booking,
 ): Promise<void> {
   const scope = await getAllowedProductTypeIds(req);
+  if (isAssistantManagerBookingRole(req.authContext?.roleSlug)
+    && (isDirectBooking(booking) || (scope !== null && booking.platform === 'omnilodge'))) {
+    // Recheck the current database role, booking update permission and product scope.
+    await assertBookingManagementAccess(req, booking);
+    return;
+  }
   if (scope === null) {
     // Keep existing storefront cancellation behavior. Only Direct gains the new role policy.
     if (!isDirectBooking(booking)) return;
@@ -33,7 +40,7 @@ export async function assertDirectBookingCancellationAccess(
         && product?.productTypeId === scope[0]) return;
     }
   }
-  throw new HttpError(403, 'Only Owners, Administrators and Managers can cancel Direct bookings. Food Tour Owners and Managers can refund only their assigned Direct or OmniLodge Food Tour bookings.');
+  throw new HttpError(403, 'Only Owners, Administrators, Managers and Assistant Managers can cancel Direct bookings. Product-scoped accounts can act only on their permitted bookings.');
 }
 
 /** Keep legacy global refund access, but require reviewed management access for delegated accounts. */

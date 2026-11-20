@@ -31,10 +31,37 @@ it.each(['owner', 'admin', 'administrator', 'manager', ' Administrator ', 'mgr']
       .resolves.toBeUndefined();
     expect(Product.findByPk).not.toHaveBeenCalled();
   });
-it.each(['assistant-manager', 'guide', 'food-tour-owner', 'food-tour-manager', 'food-tour-guide', ''])(
+it.each(['guide', 'food-tour-owner', 'food-tour-manager', 'food-tour-guide', ''])(
   'does not grant a global role %s cancellation authority', async role => {
     await expect(assertDirectBookingCancellationAccess(request(role), booking())).rejects.toMatchObject({ status: 403 });
   });
+it.each(['assistant-manager', 'assistant_manager', 'Assistant Manager', 'assistmanager'])(
+  'allows active global %s with booking update permission to cancel Direct bookings', async slug => {
+    roleModel.findByPk.mockResolvedValue({ slug: 'assistant-manager', status: true } as UserType);
+    await expect(assertDirectBookingCancellationAccess(request(slug), booking())).resolves.toBeUndefined();
+    expect(hasModuleActionPermission).toHaveBeenCalledWith(expect.anything(), 'booking-management', 'update');
+  },
+);
+it.each(['direct', 'omnilodge'])(
+  'allows scoped assistant manager actions for an assigned %s product, never another product', async platform => {
+    roleModel.findByPk.mockResolvedValue({ slug: 'assistant-manager', status: true } as UserType);
+    jest.mocked(getAllowedProductTypeIds).mockResolvedValue([3, 1]);
+    await expect(assertDirectBookingCancellationAccess(request('assistant-manager'), booking({ platform })))
+      .resolves.toBeUndefined();
+    jest.mocked(Product.findByPk).mockResolvedValue({ id: 49, productTypeId: 4 } as Product);
+    await expect(assertDirectBookingCancellationAccess(request('assistant-manager'), booking({ platform })))
+      .rejects.toMatchObject({ status: 403 });
+  },
+);
+it.each([{ permission: false }, { active: false }, { slug: 'guide' }])(
+  'rechecks assistant manager permission and current database role: %j', async scenario => {
+    roleModel.findByPk.mockResolvedValue({ slug: 'assistant-manager', status: true, ...scenario } as UserType);
+    if ('active' in scenario) roleModel.findByPk.mockResolvedValue({ slug: 'assistant-manager', status: false } as UserType);
+    jest.mocked(hasModuleActionPermission).mockResolvedValue(!('permission' in scenario));
+    await expect(assertDirectBookingCancellationAccess(request('assistant-manager'), booking()))
+      .rejects.toMatchObject({ status: 403 });
+  },
+);
 it.each(['food-tour-owner', 'food-tour-manager'])(
   'allows current scoped %s to cancel Late Bites using its actual product type', async slug => {
     jest.mocked(getAllowedProductTypeIds).mockResolvedValue([3]);
