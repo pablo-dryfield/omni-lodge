@@ -14,6 +14,10 @@ export const canManageDirectCancellations = (
   canUpdateBookings: boolean,
 ): boolean => {
   const role = String(roleSlug ?? '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  if (['assistant-manager', 'assistantmanager', 'assistmanager'].includes(role)) {
+    // The backend rechecks the current role, update permission and booking product scope.
+    return canUpdateBookings;
+  }
   if (productScoped) {
     return canUpdateBookings && ['food-tour-owner', 'food-tour-manager'].includes(role);
   }

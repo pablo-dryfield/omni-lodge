@@ -8,6 +8,9 @@ import type { AuthenticatedRequest } from '../types/AuthenticatedRequest.js';
 import { hasModuleActionPermission } from '../middleware/authorizationMiddleware.js';
 import { getAllowedProductTypeIds } from './productScopeService.js';
 
+export const isAssistantManagerBookingRole = (role: unknown): boolean =>
+  ['assistantmanager', 'assistmanager'].includes(String(role ?? '').trim().toLowerCase().replace(/[\s_-]+/g, ''));
+
 // Email-managed channels (including Ecwid) have a separate, explicitly local
 // correction path. Direct/storefront bookings retain their native workflows.
 export const isLocalActionPlatform = (platform: unknown): boolean => {
@@ -33,12 +36,19 @@ export const assertBookingManagementAccess = async (
   const foodTour = Boolean(productType && /^food tour(?:$|[ -])/i.test(productType.name.trim()));
   if (scope === null) {
     const slug = role.slug.toLowerCase().replace(/[\s_-]+/g, '');
-    if (!['admin', 'administrator', 'owner', 'manager', 'mgr'].includes(slug)) {
-      throw new HttpError(403, 'Only Owners, Administrators and Managers can force booking changes.');
+    if (!['admin', 'administrator', 'owner', 'manager', 'mgr'].includes(slug)
+      && !isAssistantManagerBookingRole(role.slug)) {
+      throw new HttpError(403, 'Only Owners, Administrators, Managers and Assistant Managers can manage booking changes.');
     }
-  } else if (!['food-tour-owner', 'food-tour-manager'].includes(role.slug) || scope.length !== 1
-    || !foodTour || product?.productTypeId !== scope[0]) {
-    throw new HttpError(403, 'This booking is outside your Food Tour management scope.');
+  } else if (isAssistantManagerBookingRole(role.slug)) {
+    if (product?.productTypeId == null || !scope.includes(product.productTypeId)) {
+      throw new HttpError(403, 'This booking is outside your assigned product scope.');
+    }
+  } else {
+    if (!['food-tour-owner', 'food-tour-manager'].includes(role.slug) || scope.length !== 1
+      || !foodTour || product?.productTypeId !== scope[0]) {
+      throw new HttpError(403, 'This booking is outside your Food Tour management scope.');
+    }
   }
   return foodTour ? 'DIRECT_BOOKINGS' : 'STOREFRONT';
 };
