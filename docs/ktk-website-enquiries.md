@@ -1,3 +1,15 @@
+The owner explicitly authorised using **OmniLodge production as the receiver for KTK staging** on 22 November 2026. This supersedes the earlier local-only deployment restriction below. KTK website production, commerce, existing order-mail behaviour and consent settings remain outside this change. The separate staging endpoint stays disabled by default; publish the immutable verified release before configuring its dedicated secret and feature switch. Actual internal email tests require separately approved exact messages and counts; no prior test approval is reused.
+
+Release candidate: `codex/ktk-staging-enquiry-receiver`, based on reviewed local commit `a1f5ab5e3adc274e6cf24f65123a9d3d3c0b7c04` and current `origin/master` `43565c50dce79641ffa9f77cc99fd8c10d188bd3`. All application, migration and test Git blobs remain identical to the accepted local candidate; this follow-up changes documentation only. Required PR CI, successful immutable Release artifact identity/checksums, managed production deployment, public release/backend/UI identity and disabled-endpoint checks are still mandatory. Do not build or edit live release directories.
+
+After receiver verification, configure only the four registered staging-enquiry keys through the existing authorised Control Panel with an audited reason. Do not change the existing purchase sender, Gmail account/credentials, order transport, DNS or provider configuration. The HMAC secret is dedicated to the staging WordPress server and remains secret/encrypted. Activate KTK staging under its guarded publication, backups, exact protected-state and cache checks. The WordPress batch gets its one consolidated push/PR after verified staging integration. This receiver needs its own OmniLodge PR/release first because the installed staging integration depends on it.
+
+Rollback uses the previous immutable application release and disables the staging-only switch. Retain any delivery identities; never discard a nonempty delivery table or automatically replay uncertain messages. No public messages or support requests are authorised by this release.
+
+The local backend/UI are running on loopback against the task-owned synthetic database `omni_ktk_enquiry_dev_20261122_a1f5ab5e`, with email/background jobs blocked. That remains development evidence, not a production receiver or inbox-delivery result. Earlier local-only scope and evidence follow as dated history.
+
+---
+
 The KTK enquiry receiver is a **local-only candidate**, disabled by default. The owner chose isolated local testing; no production or non-production deployment, account configuration, actual email or source PR is authorised by this candidate's local verification. Keep the unrelated primary checkout and its Competitors changes intact.
 
 `POST /api/website-enquiries/staging` accepts only bounded raw JSON authenticated by a dedicated timestamped HMAC. It is mounted before the global JSON parser. There is no production enquiry route. Existing paid-order routes and mail defaults remain unchanged.
