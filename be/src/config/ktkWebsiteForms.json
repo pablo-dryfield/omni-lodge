@@ -1,0 +1,513 @@
+{
+  "version": "2026-11-22.1",
+  "site": "ktk",
+  "environment": "staging",
+  "forms": [
+    {
+      "id": "contact",
+      "route": "/contact/",
+      "title": "Contact | Krawl Through Krakow",
+      "postId": 195,
+      "subjectPattern": "[Krawl Through Krakow] Contact | Krawl Through Krakow",
+      "successMessage": "Thank you. Your message has been sent.",
+      "arithmetic": true,
+      "recipients": {
+        "to": [
+          "pubthroughkrakow@gmail.com"
+        ],
+        "cc": []
+      },
+      "bodyTemplate": null,
+      "fields": [
+        {
+          "id": "name",
+          "name": "et_pb_contact_name_0",
+          "label": "Name",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "email",
+          "name": "et_pb_contact_email_0",
+          "label": "Email Address",
+          "type": "email",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "message",
+          "name": "et_pb_contact_message_0",
+          "label": "Message",
+          "type": "textarea",
+          "required": true,
+          "maxBytes": 10000
+        }
+      ]
+    },
+    {
+      "id": "pub-crawl-jobs",
+      "route": "/pub-crawl-jobs/",
+      "title": "Pub Crawl Jobs | Krawl Through Krakow",
+      "postId": 1281,
+      "subjectPattern": "[Krawl Through Krakow] Pub Crawl Jobs | Krawl Through Krakow",
+      "successMessage": "Thank you. Your message has been sent.",
+      "arithmetic": true,
+      "recipients": {
+        "to": [
+          "pubthroughkrakow@gmail.com"
+        ],
+        "cc": []
+      },
+      "bodyTemplate": null,
+      "fields": [
+        {
+          "id": "name",
+          "name": "et_pb_contact_name_0",
+          "label": "Full Name (required)",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "email",
+          "name": "et_pb_contact_email_0",
+          "label": "Email Address (required)",
+          "type": "email",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "social_media",
+          "name": "et_pb_contact_social_media_0",
+          "label": "Your Social Media Profile Link",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "phone_number",
+          "name": "et_pb_contact_phone_number_0",
+          "label": "Phone Number / Whatsapp (Don't forget your country code)",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "why_do_you_think",
+          "name": "et_pb_contact_why_do_you_think_0",
+          "label": "Why do you think you would be perfect for this position?",
+          "type": "textarea",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "what_motivates",
+          "name": "et_pb_contact_what_motivates_0",
+          "label": "What motivates you for this position?",
+          "type": "textarea",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "when_would_you_like_to_start?",
+          "name": "et_pb_contact_when_would_you_like_to_start?_0",
+          "label": "When would you like to start?",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "until_when?",
+          "name": "et_pb_contact_until_when?_0",
+          "label": "Until when?",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "field_10",
+          "name": "et_pb_contact_field_10_0",
+          "label": "Anything else you'd like to ask us?",
+          "type": "textarea",
+          "required": true,
+          "maxBytes": 10000
+        }
+      ]
+    },
+    {
+      "id": "student-trips-poland",
+      "route": "/student-trips-poland/",
+      "title": "Student Trips Poland | Krawl Through Krakow",
+      "postId": 2043,
+      "subjectPattern": "[Krawl Through Krakow] Student Trips Poland | Krawl Through Krakow",
+      "successMessage": "Thank you for your enquiry! We will get back to you in less than 24hrs :)",
+      "arithmetic": false,
+      "recipients": {
+        "to": [
+          "info@krawlthroughkrakow.com"
+        ],
+        "cc": []
+      },
+      "bodyTemplate": "STUDENT TRIPS ENQUIRY\n\nName: %%Name%%\n---------------------\nEmail: %%Email%%\n---------------------\nUni/Soc: %%uni%%\n---------------------\nGroup Size: %%size%%\n---------------------\nMessage: %%Message%%",
+      "fields": [
+        {
+          "id": "name",
+          "name": "et_pb_contact_name_0",
+          "label": "Name",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "email",
+          "name": "et_pb_contact_email_0",
+          "label": "Email Address",
+          "type": "email",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "uni",
+          "name": "et_pb_contact_uni_0",
+          "label": "University/Society Name",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "size",
+          "name": "et_pb_contact_size_0",
+          "label": "Group Size",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "message",
+          "name": "et_pb_contact_message_0",
+          "label": "Message: what were you looking to do while in Krakow ?",
+          "type": "textarea",
+          "required": true,
+          "maxBytes": 10000
+        }
+      ]
+    },
+    {
+      "id": "krakow-hen-do",
+      "route": "/krakow-hen-do/",
+      "title": "Krakow Hen do | Krawl Through Krakow",
+      "postId": 7891,
+      "subjectPattern": "[Krawl Through Krakow] Krakow Hen do | Krawl Through Krakow",
+      "successMessage": "Thank you. Your message has been sent.",
+      "arithmetic": true,
+      "recipients": {
+        "to": [
+          "pubthroughkrakow@gmail.com"
+        ],
+        "cc": []
+      },
+      "bodyTemplate": null,
+      "fields": [
+        {
+          "id": "name",
+          "name": "et_pb_contact_name_0",
+          "label": "Name",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "email",
+          "name": "et_pb_contact_email_0",
+          "label": "Email Address",
+          "type": "email",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "phone_number",
+          "name": "et_pb_contact_phone_number_0",
+          "label": "Phone Number",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "group_size",
+          "name": "et_pb_contact_group_size_0",
+          "label": "Group Size",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "date_of_arrival",
+          "name": "et_pb_contact_date_of_arrival_0",
+          "label": "Date of Arrival",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "message",
+          "name": "et_pb_contact_message_0",
+          "label": "Message",
+          "type": "textarea",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "selection",
+          "name": "et_pb_contact_selection_0",
+          "label": "Select which tours you want to add to your Hen do",
+          "type": "multiselect",
+          "required": true,
+          "maxBytes": 10000,
+          "options": [
+            "Life Drawing Session",
+            "Polish Vodka Tasking",
+            "Stretch Hummer with Strippers and Champagne",
+            "Cocktail Making Class",
+            "Spa Day / Beauty Treatment",
+            "Polish Food Tour"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "krakow-stag-do",
+      "route": "/krakow-stag-do/",
+      "title": "Krakow Stag do | Krawl Through Krakow",
+      "postId": 7889,
+      "subjectPattern": "[Krawl Through Krakow] Krakow Stag do | Krawl Through Krakow",
+      "successMessage": "Thank you. Your message has been sent.",
+      "arithmetic": true,
+      "recipients": {
+        "to": [
+          "pubthroughkrakow@gmail.com"
+        ],
+        "cc": []
+      },
+      "bodyTemplate": null,
+      "fields": [
+        {
+          "id": "name",
+          "name": "et_pb_contact_name_0",
+          "label": "Name",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "email",
+          "name": "et_pb_contact_email_0",
+          "label": "Email Address",
+          "type": "email",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "phone_number",
+          "name": "et_pb_contact_phone_number_0",
+          "label": "Phone Number",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "group_size",
+          "name": "et_pb_contact_group_size_0",
+          "label": "Group Size",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "date_of_arrival",
+          "name": "et_pb_contact_date_of_arrival_0",
+          "label": "Date of Arrival",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "message",
+          "name": "et_pb_contact_message_0",
+          "label": "Message",
+          "type": "textarea",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "selection",
+          "name": "et_pb_contact_selection_0",
+          "label": "Select which tours you want to add to your Stag trip",
+          "type": "multiselect",
+          "required": true,
+          "maxBytes": 10000,
+          "options": [
+            "Polish Vodka Tasting",
+            "Bubble Football",
+            "Stretch Hummer with Strippers and Champagne",
+            "Krakow Beer Hall Feast",
+            "Shooting Range",
+            "Football Pitch Rental",
+            "Krakow Pub Crawl",
+            "Brewary Tour",
+            "Escape Room",
+            "Beer Tasting Tour",
+            "Axe Throwing",
+            "Attending a Football Match",
+            "Paintball",
+            "Boat Party / Private Boat",
+            "Strip Club",
+            "Krakow Go-Karting",
+            "Airsoft Combat"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "stagshens",
+      "route": "/stagshens/",
+      "title": "Stags & Hens | Krawl Through Krakow",
+      "postId": 276,
+      "subjectPattern": "Activity STAG/HEN-DO for %%number-people%% on %%date-370%%",
+      "successMessage": "Thank you. Your enquiry has been sent; this does not confirm a booking.",
+      "arithmetic": false,
+      "recipients": {
+        "to": [
+          "pubthroughkrakow@gmail.com"
+        ],
+        "cc": [
+          "activities@krawlthroughkrakow.com"
+        ]
+      },
+      "bodyTemplate": null,
+      "fields": [
+        {
+          "id": "your-name",
+          "name": "your-name",
+          "label": "Your Name (required)",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000,
+          "maxLength": 400
+        },
+        {
+          "id": "your-email",
+          "name": "your-email",
+          "label": "Your Email address (required)",
+          "type": "email",
+          "required": true,
+          "maxBytes": 10000,
+          "maxLength": 400
+        },
+        {
+          "id": "activities",
+          "name": "activities[]",
+          "label": "Stag/Hen activities",
+          "type": "multiselect",
+          "required": false,
+          "maxBytes": 10000,
+          "options": [
+            "Vodka Tasting",
+            "Pub Crawl",
+            "Strip Club",
+            "Stag Airport Transfer",
+            "Bubble Football",
+            "Beer Hall Fest",
+            "Bungee Jumping (Mar-Sep)",
+            "White Water Rafting (Apr-May)",
+            "Shooting Range",
+            "Air Soft Combat",
+            "Go-Karting",
+            "Paintball",
+            "Paintball",
+            "Vodka Tasting",
+            "Pub Crawl",
+            "Male Stripper",
+            "Hen-do Airport Transfer",
+            "Spa Day",
+            "Massage Therapy",
+            "Bungee Jumping (Mar-Sep)",
+            "White Water Rafting (Apr-May)",
+            "Shooting Range"
+          ]
+        },
+        {
+          "id": "number-people",
+          "name": "number-people",
+          "label": "How many people? (required)",
+          "type": "number",
+          "required": true,
+          "maxBytes": 10000,
+          "min": 0
+        },
+        {
+          "id": "date-370",
+          "name": "date-370",
+          "label": "Date of Visit (required)",
+          "type": "date",
+          "required": true,
+          "maxBytes": 10000
+        },
+        {
+          "id": "textarea-253",
+          "name": "textarea-253",
+          "label": "Need any other info? Ask us here (optional)",
+          "type": "textarea",
+          "required": false,
+          "maxBytes": 10000,
+          "maxLength": 2000
+        }
+      ]
+    },
+    {
+      "id": "post-welcome-to-alcohol",
+      "route": "/welcome-to-alcohol/",
+      "title": "The Big Prize Competition | Krawl Through Krakow",
+      "postId": 1271,
+      "subjectPattern": "Drunk Story Entry from %%your-name%%",
+      "successMessage": "Thank you. Your story has been sent.",
+      "arithmetic": false,
+      "recipients": {
+        "to": [
+          "pubthroughkrakow@gmail.com"
+        ],
+        "cc": []
+      },
+      "bodyTemplate": null,
+      "fields": [
+        {
+          "id": "your-name",
+          "name": "your-name",
+          "label": "Your Name (required)",
+          "type": "text",
+          "required": true,
+          "maxBytes": 10000,
+          "maxLength": 400
+        },
+        {
+          "id": "your-email",
+          "name": "your-email",
+          "label": "Your Email (required)",
+          "type": "email",
+          "required": true,
+          "maxBytes": 10000,
+          "maxLength": 400
+        },
+        {
+          "id": "your-message",
+          "name": "your-message",
+          "label": "Your Story",
+          "type": "textarea",
+          "required": true,
+          "maxBytes": 10000,
+          "maxLength": 2000
+        }
+      ]
+    }
+  ]
+}

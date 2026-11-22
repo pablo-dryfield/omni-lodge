@@ -1,4 +1,5 @@
 import { SYSTEM_MANAGEMENT_CONFIG } from './systemManagementConfig.js';
+import { WEBSITE_ENQUIRY_CONFIG } from './websiteEnquiryConfig.js';
 import { partnerConfigDefinitions } from './partnerConfig.js';
 import { DEFAULT_WALK_IN_TICKET_TYPES, WALK_IN_TICKET_CONFIG_KEY } from './walkInTicketConfig.js';
 import {
@@ -28,6 +29,7 @@ export type ConfigDefinition = {
 };
 
 export const CONFIG_DEFINITIONS: ConfigDefinition[] = [
+  ...WEBSITE_ENQUIRY_CONFIG,
   ...partnerConfigDefinitions,
   {
     key: 'SEARCH_CONSOLE_PAGE_SIZE', label: 'Search Console detail page size', category: 'Google API',

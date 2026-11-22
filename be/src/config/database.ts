@@ -6,6 +6,7 @@ import BookingAddon from "../models/BookingAddon.js";
 import BookingEmail from "../models/BookingEmail.js";
 import BookingEvent from "../models/BookingEvent.js";
 import EmailTemplate from "../models/EmailTemplate.js";
+import WebsiteEnquiryDelivery from "../models/WebsiteEnquiryDelivery.js";
 import Channel from "../models/Channel.js";
 import { partnerModels } from "../models/Partner.js";
 import Guest from "../models/Guest.js";
@@ -256,6 +257,7 @@ const sequelize = new Sequelize({
     BookingEmail,
     BookingEvent,
     EmailTemplate,
+    WebsiteEnquiryDelivery,
     Channel,
     ChannelCommission,
     ChannelProductPrice,

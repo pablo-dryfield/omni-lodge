@@ -141,6 +141,28 @@ describe('Gmail threaded replies', () => {
     });
   });
 
+  it('adds optional enquiry Cc/Reply-To while leaving default order headers absent', async () => {
+    await sendMessage({to:'team@example.test',subject:'Enquiry',textBody:'Local only',cc:'activities@example.test',replyTo:'guest@example.test',singleAttempt:true});
+    let raw=Buffer.from(mockGmailSend.mock.calls[0][0].requestBody.raw,'base64url').toString('utf8');
+    expect(raw).toContain('Cc: activities@example.test\r\n');expect(raw).toContain('Reply-To: guest@example.test\r\n');
+    mockGmailSend.mockClear();await sendMessage({to:'customer@example.test',subject:'Order',textBody:'Existing caller'});
+    raw=Buffer.from(mockGmailSend.mock.calls[0][0].requestBody.raw,'base64url').toString('utf8');
+    expect(raw).not.toMatch(/^Cc:/m);expect(raw).not.toMatch(/^Reply-To:/m);
+  });
+  it.each(['cc','replyTo'] as const)('rejects injection into optional %s before Gmail sends',async key=>{
+    await expect(sendMessage({to:'team@example.test',subject:'Enquiry',textBody:'Local only',[key]:'a@example.test\r\nBcc: other@example.test'})).rejects.toThrow('Invalid '+key+' header');
+    expect(mockGmailSend).not.toHaveBeenCalled();
+  });
+  it('uses one enquiry send attempt and reconciles uncertainty without sending again or using backup',async()=>{
+    mockGmailList.mockResolvedValue({data:{messages:[]}});
+    mockGmailSend.mockRejectedValue({response:{status:500},message:'Uncertain transport'});
+    mockConfigValues.set('GMAIL_SEND_REFRESH_TOKEN','backup-user-token');
+    jest.useFakeTimers();
+    try {
+      const result=expect(sendMessage({to:'team@example.test',subject:'Enquiry',textBody:'Local only',rfcMessageId:'<local-enquiry@example.test>',singleAttempt:true})).rejects.toBeDefined();
+      await jest.runAllTimersAsync();await result;expect(mockGmailSend).toHaveBeenCalledTimes(1);
+    }finally{jest.useRealTimers();}
+  });
   it('uses persistent backup message references when reading the forwarded mailbox', async () => {
     mockConfigValues.set('GMAIL_SEND_REFRESH_TOKEN', 'backup-user-token');
     mockGmailList.mockResolvedValueOnce({

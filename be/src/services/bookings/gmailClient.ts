@@ -345,6 +345,10 @@ export type GmailMessagePayload = {
 };
 
 type SendMessageParams = {
+  /** Enquiries may reconcile an uncertain send, but must never send a second copy. */
+  singleAttempt?: boolean;
+  cc?: string | null;
+  replyTo?: string | null;
   /** Keep backup message references addressable by the read/reply endpoints. */
   returnAccountReference?: boolean;
   to: string;
@@ -486,10 +490,17 @@ const buildMimeMessage = (params: SendMessageParams, rfcMessageId: string): stri
   const attachments = Array.isArray(params.attachments) ? params.attachments : [];
   const inReplyTo = extractRfcMessageIds(params.inReplyTo)[0] ?? null;
   const references = buildReferencesHeader(params);
+  const optionalHeaders = (['cc', 'replyTo'] as const).flatMap((key) => {
+    const value = params[key];
+    if (!value?.trim()) return [];
+    if (/[\r\n]/.test(value)) throw new Error(`Invalid ${key} header`);
+    return [`${key === 'cc' ? 'Cc' : 'Reply-To'}: ${value.trim()}`];
+  });
 
   const messageLines: string[] = [
     `To: ${sanitizeHeaderValue(params.to)}`,
     ...(params.from ? [`From: ${sanitizeHeaderValue(params.from)}`] : []),
+    ...optionalHeaders,
     `Subject: ${encodeMimeHeaderValue(params.subject)}`,
     `Message-ID: ${sanitizeHeaderValue(rfcMessageId)}`,
     ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
@@ -930,7 +941,8 @@ const sendMessageWithAccount = async (
     }
   }
 
-  for (let attempt = 1; attempt <= GMAIL_SEND_MAX_ATTEMPTS; attempt += 1) {
+  const maxAttempts = params.singleAttempt ? 1 : GMAIL_SEND_MAX_ATTEMPTS;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       assertGmailApiCooldownElapsed(account);
       const { data } = await gmail.users.messages.send({
@@ -964,7 +976,7 @@ const sendMessageWithAccount = async (
       }
 
       logger.warn(
-        `[booking-email] Gmail ${account} account send failed with a retryable transport error on attempt ${attempt}/${GMAIL_SEND_MAX_ATTEMPTS}: ${(sendError as Error).message}`,
+        `[booking-email] Gmail ${account} account send failed with a retryable transport error on attempt ${attempt}/${maxAttempts}: ${(sendError as Error).message}`,
       );
 
       const reconciled = await findSentMessageByRfcMessageId(
@@ -980,7 +992,7 @@ const sendMessageWithAccount = async (
         return reconciled;
       }
 
-      if (attempt >= GMAIL_SEND_MAX_ATTEMPTS) {
+      if (attempt >= maxAttempts) {
         throw sendError;
       }
     }
@@ -1008,7 +1020,7 @@ export const sendMessage = async (params: SendMessageParams): Promise<SendMessag
     );
     return resolvedParams.returnAccountReference && sent.id ? { ...sent, id: buildMessageReference('primary', sent.id) } : sent;
   } catch (primaryError) {
-    const canFailOver = hasBackupGmailAccount()
+    const canFailOver = !resolvedParams.singleAttempt && hasBackupGmailAccount()
       && (isGmailCooldownError(primaryError) || isGmailRateLimitError(primaryError));
     if (!canFailOver) {
       logger.error(`[booking-email] Failed to send Gmail message: ${(primaryError as Error).message}`);
