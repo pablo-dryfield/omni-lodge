@@ -70,6 +70,7 @@ import channelNumbersRoutes from './routes/channelNumbersRoutes.js';
 import venueNumbersRoutes from './routes/venueNumbersRoutes.js';
 import catalogRoutes from './routes/catalogRoutes.js';
 import storefrontRoutes from './routes/storefrontRoutes.js';
+import websiteEnquiryRoutes from './routes/websiteEnquiryRoutes.js';
 import storefrontSavedCartRoutes from './routes/storefrontSavedCartRoutes.js';
 import storefrontOngoingCartRoutes from './routes/storefrontOngoingCartRoutes.js';
 import storefrontPromotionRoutes from './routes/storefrontPromotionRoutes.js';
@@ -290,6 +291,7 @@ app.post(
 // also applies to chunked and compressed requests without Content-Length. Raw
 // payment/WhatsApp webhooks above retain their byte-exact parsers.
 app.use('/api/client-errors', clientErrorRoutes);
+app.use('/api/website-enquiries', websiteEnquiryRoutes);
 
 // Authenticate before accepting bounded import content; other endpoints retain
 // Express's small default body budget. The workspace applies its live lower cap.

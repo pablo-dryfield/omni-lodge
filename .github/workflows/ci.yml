@@ -413,6 +413,8 @@ jobs:
 
       - name: Verify historical cleaning attendance repair
         run: node --import tsx --test integration-tests/cleaning-attendance-migration.test.mjs
+      - name: Verify isolated enquiry delivery identities and rollback
+        run: node --import tsx --test integration-tests/website-enquiry-delivery.test.mjs
 
       - name: Run migrations again
         run: npm run migrate:runtime

@@ -7,3 +7,7 @@
 /ops/system-management/** text eol=lf
 /management-server/** text eol=lf
 /management-ui/** text eol=lf
+
+# The enquiry protocol pins these source bytes across Windows/Linux checkouts.
+/be/src/config/ktkWebsiteForms.json text eol=lf
+/be/src/config/ktkWebsiteForms.ts text eol=lf
