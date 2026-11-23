@@ -7,7 +7,7 @@ export type EnquiryField = {
   maxLength?: number; min?: number; options?: readonly string[];
 };
 export type EnquiryForm = {
-  id: string; route: string; subjectPattern: string; successMessage: string;
+  id: string; title: string; route: string; subjectPattern: string; successMessage: string;
   recipients: { to: readonly string[]; cc: readonly string[] };
   bodyTemplate: string | null; fields: readonly EnquiryField[];
 };

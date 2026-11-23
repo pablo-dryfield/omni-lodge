@@ -1,6 +1,7 @@
 import{test}from'node:test';import assert from'node:assert/strict';import{randomBytes,randomUUID}from'node:crypto';import fs from'node:fs';import dotenv from'dotenv';import pg from'pg';import{Sequelize}from'sequelize-typescript';
 import WebsiteEnquiryDelivery from'../src/models/WebsiteEnquiryDelivery.ts';
 import{up,down}from'../src/migrations/202611220001-website-enquiry-deliveries.ts';
+import{up as upInbox,down as downInbox}from'../src/migrations/202611230001-customer-enquiries.ts';
 import{websiteEnquiryRepository}from'../src/services/websiteEnquiryRepository.ts';
 import{createWebsiteEnquiryService}from'../src/services/websiteEnquiryService.ts';
 import{ENQUIRY_FORMS,ENQUIRY_SCHEMA_SHA256}from'../src/services/websiteEnquiryContract.ts';
@@ -21,6 +22,20 @@ test('local PostgreSQL uniquely reserves enquiry deliveries, retains uncertainty
    transaction:async fn=>{await control.query('BEGIN');try{const value=await fn({});await control.query('COMMIT');return value;}catch(error){await control.query('ROLLBACK');throw error;}},
   }};
   await up({context});
+  // Minimal local access-control fixtures let the actual inbox migration run in the owned schema.
+  await control.query(`CREATE TABLE users(id INTEGER PRIMARY KEY);
+   CREATE TABLE "userTypes"(id INTEGER PRIMARY KEY,slug TEXT UNIQUE NOT NULL);
+   CREATE TABLE pages(id SERIAL PRIMARY KEY,slug TEXT UNIQUE,name TEXT,description TEXT,"sortOrder" INTEGER,status BOOLEAN,"createdAt" TIMESTAMPTZ,"updatedAt" TIMESTAMPTZ);
+   CREATE TABLE modules(id SERIAL PRIMARY KEY,"pageId" INTEGER,slug TEXT UNIQUE,name TEXT,"componentRef" TEXT,"sortOrder" INTEGER,status BOOLEAN,"createdAt" TIMESTAMPTZ,"updatedAt" TIMESTAMPTZ);
+   CREATE TABLE actions(id SERIAL PRIMARY KEY,key TEXT UNIQUE);
+   CREATE TABLE "moduleActions"("moduleId" INTEGER,"actionId" INTEGER,enabled BOOLEAN,"createdAt" TIMESTAMPTZ,"updatedAt" TIMESTAMPTZ,UNIQUE("moduleId","actionId"));
+   CREATE TABLE "rolePagePermissions"("userTypeId" INTEGER,"pageId" INTEGER,"canView" BOOLEAN,status BOOLEAN,"createdAt" TIMESTAMPTZ,"updatedAt" TIMESTAMPTZ,UNIQUE("userTypeId","pageId"));
+   CREATE TABLE "roleModulePermissions"("userTypeId" INTEGER,"moduleId" INTEGER,"actionId" INTEGER,allowed BOOLEAN,status BOOLEAN,"createdAt" TIMESTAMPTZ,"updatedAt" TIMESTAMPTZ,UNIQUE("userTypeId","moduleId","actionId"));
+   INSERT INTO users VALUES(1);INSERT INTO "userTypes" VALUES(1,'admin'),(2,'owner'),(3,'manager');INSERT INTO actions(key)VALUES('view'),('update'),('create'),('delete');`);
+  const legacyId=randomUUID();await control.query(`INSERT INTO website_enquiry_deliveries(request_id,form_id,payload_hash,status,rfc_message_id)VALUES($1,'contact',$2,'sent','<historical@test>')`,[legacyId,'a'.repeat(64)]);
+  await upInbox({context});
+  assert.equal((await control.query('SELECT enquiry_data FROM website_enquiry_deliveries WHERE request_id=$1',[legacyId])).rows[0].enquiry_data,null,'Historical contents are never invented or imported');
+  assert.equal((await control.query('SELECT count(*)::int AS n FROM "roleModulePermissions" WHERE "userTypeId"=3')).rows[0].n,0,'New inbox is not granted to other roles');
   orm=new Sequelize({dialect:'postgres',host:config.host,port:config.port,database:config.database,username:config.user,password:config.password,logging:false,models:[WebsiteEnquiryDelivery],define:{schema},pool:{max:3,min:0}});
   assert.equal(WebsiteEnquiryDelivery.getTableName().schema,schema,'ORM and migration must share only the owned schema');
   let release;const pending=new Promise(resolve=>{release=resolve;});const captured=[];
@@ -39,12 +54,21 @@ test('local PostgreSQL uniquely reserves enquiry deliveries, retains uncertainty
   const unknown={...payload,requestId:randomUUID()};await assert.rejects(fail(unknown),error=>error.status===503);
   await assert.rejects(fail(unknown),error=>error.status===409);
   assert.equal((await WebsiteEnquiryDelivery.findByPk(unknown.requestId)).status,'uncertain');
-  const records=await WebsiteEnquiryDelivery.findAll({raw:true});assert.equal(records.length,2);
-  assert.ok(!JSON.stringify(records).includes('local-postgres@example.test'));assert.ok(!JSON.stringify(records).includes('INTERNAL LOCAL TEST'));
+  const records=await WebsiteEnquiryDelivery.findAll({raw:true});assert.equal(records.length,3);
+  const saved=records.find(r=>r.requestId===payload.requestId);assert.equal(saved.customerEmail,'local-postgres@example.test');assert.deepEqual(saved.enquiryData.fields,fields);
+  assert.equal(saved.handlingStatus,'new');assert.equal(saved.sourceEnvironment,'staging');assert.equal(saved.enquiryData.notification.subject,saved.subject);
+  assert.deepEqual(records.find(r=>r.requestId===unknown.requestId).enquiryData.fields,fields,'Uncertain email still retains the enquiry');
+  await assert.rejects(downInbox({context}),/non-empty data cannot be rolled back/);
+  assert.equal((await control.query('SELECT count(*)::int AS n FROM website_enquiry_deliveries')).rows[0].n,3);
+  await assert.rejects(control.query(`INSERT INTO customer_enquiry_templates(form_id,subject_template,body_template,layout)VALUES('contact','Subject','Body','script')`),/check constraint/);
+  await control.query(`INSERT INTO customer_enquiry_templates(form_id,subject_template,body_template,updated_by)VALUES('contact','Subject','Body',1)`);
+  await assert.rejects(control.query(`INSERT INTO customer_enquiry_templates(form_id,subject_template,body_template)VALUES('contact','Other','Other')`),/duplicate key/);
+  await control.query(`DELETE FROM customer_enquiry_templates WHERE form_id='contact'`);
   await assert.rejects(control.query(`INSERT INTO website_enquiry_deliveries(request_id,form_id,payload_hash,status,rfc_message_id) VALUES($1,'contact',$2,'invalid','<local@test>')`,[randomUUID(),'f'.repeat(64)]),/website_enquiry_delivery_status_ck/);
   await assert.rejects(down({context}),/non-empty delivery table cannot be removed/);
-  assert.equal((await WebsiteEnquiryDelivery.count()),2,'Refused rollback retains both deduplication records');
+  assert.equal((await WebsiteEnquiryDelivery.count()),3,'Refused rollback retains old and new deduplication records');
   await WebsiteEnquiryDelivery.destroy({where:{requestId:records.map(x=>x.requestId)}});
+  await downInbox({context});
   await down({context});
  }finally{
   if(orm)await orm.close();

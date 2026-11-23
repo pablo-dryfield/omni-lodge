@@ -8,8 +8,9 @@ import { assertOutboundEmailAllowed } from '../config/outboundEmailPolicy.js';
 import { sendMessage } from '../services/bookings/gmailClient.js';
 import { createWebsiteEnquiryService, type EnquiryDeliveryResult } from '../services/websiteEnquiryService.js';
 import { websiteEnquiryRepository } from '../services/websiteEnquiryRepository.js';
+import { renderConfiguredEnquiryNotification } from '../services/customerEnquiryTemplates.js';
 
-const productionSubmit = createWebsiteEnquiryService({repository: websiteEnquiryRepository, getConfig: getConfigValue, assertOutboundAllowed: assertOutboundEmailAllowed, sendMail: sendMessage});
+const productionSubmit = createWebsiteEnquiryService({repository: websiteEnquiryRepository, getConfig: getConfigValue, assertOutboundAllowed: assertOutboundEmailAllowed, sendMail: sendMessage,renderMail:renderConfiguredEnquiryNotification});
 export type WebsiteEnquiryRouteDependencies = {
   getConfig: (key: string) => unknown;
   refreshConfig: (keys: readonly string[]) => Promise<void>;

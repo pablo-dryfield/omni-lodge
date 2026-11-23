@@ -24,6 +24,7 @@ export const PAGE_SLUGS = {
   affiliates: "affiliates",
   partners: "partners",
   requests: "requests",
+  customerEnquiries: "customer-enquiries",
   performance: "performance",
   errorMonitoring: "error-monitoring",
   reviews: "reviews",

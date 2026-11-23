@@ -32,6 +32,7 @@ const SearchConsolePage = lazy(() => import("../../pages/SearchConsolePage"));
 const AffiliatesPage = lazy(() => import("../../pages/AffiliatesPage"));
 const PartnersPage = lazy(() => import("../../pages/PartnersPage"));
 const RequestsPage = lazy(() => import("../../pages/RequestsPage"));
+const CustomerEnquiries = lazy(() => import("../../pages/CustomerEnquiries"));
 const PrivacyPolicyPage = lazy(() => import("../../pages/PrivacyPolicyPage"));
 const DataDeletionPage = lazy(() => import("../../pages/DataDeletionPage"));
 const TermsPage = lazy(() => import("../../pages/TermsPage"));
@@ -138,6 +139,7 @@ const Routes = () => {
         <Route path="/affiliates" element={<AffiliatesPage title="Affiliates" />} />
         <Route path="/partners" element={<PartnersPage title="Partners" />} />
         <Route path="/requests" element={<RequestsPage />} />
+        <Route path="/customer-enquiries" element={<CustomerEnquiries />} />
         <Route path="/privacy-policy" element={<PrivacyPolicyPage title="Privacy Policy" />} />
         <Route path="/data-deletion" element={<DataDeletionPage title="Data Deletion Request" />} />
         <Route path="/terms" element={<TermsPage title="Terms" />} />
