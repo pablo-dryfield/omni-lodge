@@ -38,9 +38,17 @@ Local commands/results:
 - `npm --prefix be run check`: passed.
 - `npm --prefix be test -- --runInBand`: 379 suites passed; 3,899 tests passed and one existing test skipped. An earlier run with a global mail-disable flag blocked nine existing mocked Gmail-client cases; the normal unit-test environment passed without changing those tests. The actual application runtime remains mail-disabled locally.
 - Focused backend receiver/inbox/template contracts: 52 passed.
-- `node --import tsx --test integration-tests/website-enquiry-delivery.test.mjs`: passed against local PostgreSQL, including the actual migration, uniqueness, content retention, uncertain delivery and rollback guards. The existing PostgreSQL16/17 CI job runs this same file.
+- `node --import tsx --test integration-tests/website-enquiry-delivery.test.mjs`: passed against local PostgreSQL, including the actual migration, uniqueness, content retention, uncertain delivery and rollback guards. The dedicated migrations CI job runs this file on PostgreSQL 16.10. The separate backend unit-test matrix covers PostgreSQL 16 and 17.
 - `npm --prefix ui run check`: passed; current local development bundle also compiles cleanly.
 - Complete UI discovery independently matches all191 current source test files, retaining all190 originals. The Windows CRA matcher contained mixed path separators; a CLI-only normalised equivalent selected the complete source set. CI configuration is unchanged.
 - The first full local UI run passed189/191 suites (1,336/1,338 tests), with async-content failures in unchanged PaymentLinksPage and OngoingCartsPanel suites. Those unchanged suites plus the enquiry screen passed21/21 in a separate serial run. The final enquiry screen passes5/5 after the history-filter/accessible-close follow-up. These retained local failures are not relabelled as a full pass; complete current GitHub CI is required before merge.
 
 Private task evidence and source originals are retained outside the repository. No real email, historical mailbox import, customer reply, order/payment, sender/provider/account, website production, consent/GTM or unrelated Competitors change is part of the local verification. Immutable CI release and managed deployment remain required before describing the feature as live.
+
+## Verified delivery — 23 November 2026
+
+[PR270](https://github.com/pablo-dryfield/omni-lodge/pull/270) merged as `a31cccaad90e` with the reviewed tree `4871177a`. [All nine current PR CI jobs](https://github.com/pablo-dryfield/omni-lodge/actions/runs/45162287139) passed, including both backend matrix jobs and all 191 UI suites / 1,339 tests. The earlier local failures remain retained as scoped evidence.
+
+[Immutable Release45164022398](https://github.com/pablo-dryfield/omni-lodge/actions/runs/45164022398) and its [automatic managed deployment45166121877](https://github.com/pablo-dryfield/omni-lodge/actions/runs/45166121877) succeeded. Independent verification checked all 2,961 packaged files, the terminal host request, public backend/UI release identities, companion smoke checks, the main JavaScript asset and the actual Customer Enquiries lazy chunk. Read-only before/after checks preserve the all-Gmail/no-Cc configuration and seven original approved delivery identities. Old rows retain null contents. Anonymous inbox access and invalid receiver inputs were rejected; no additional valid enquiry or real email was sent.
+
+The new-submissions inbox is available at [Customer Enquiries](https://omni-lodge.com/customer-enquiries). Actual signed-in owner access is a separate account check. Historical Gmail import remains deferred, and KTK website production integration remains outside this delivery.
