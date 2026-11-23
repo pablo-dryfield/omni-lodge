@@ -1,9 +1,12 @@
 import HttpError from '../errors/HttpError.js';
-import { renderWebsiteEnquiry, resolveEnquiryRecipients, validateWebsiteEnquiry, websiteEnquiryFingerprint, isEmailAddress } from './websiteEnquiryContract.js';
+import { renderWebsiteEnquiry, resolveEnquiryRecipients, validateWebsiteEnquiry, websiteEnquiryFingerprint, isEmailAddress, type EnquiryPayload, type EnquiryForm } from './websiteEnquiryContract.js';
+
+export type EnquirySnapshot={schemaSha256:string;fields:EnquiryPayload['fields'];labels:Record<string,string>;notification:{subject:string;textBody:string;htmlBody?:string;replyTo:string;from:string;to:string;cc?:string};mailbox:string};
 
 export type EnquiryDeliveryRecord = {
   requestId: string; formId: string; payloadHash: string; status: 'sending' | 'sent' | 'uncertain';
   rfcMessageId: string; providerMessageId: string | null;
+  enquiryData?: EnquirySnapshot | null; customerName?: string | null; customerEmail?: string | null; subject?: string | null; sourceEnvironment?: 'staging';
 };
 export type EnquiryDeliveryRepository = {
   reserve: (record: EnquiryDeliveryRecord) => Promise<boolean>;
@@ -14,12 +17,14 @@ export type EnquiryDeliveryRepository = {
 export type WebsiteEnquiryMail = {
   to: string; cc?: string; from: string; replyTo: string; subject: string; textBody: string;
   rfcMessageId: string; singleAttempt: true;
+  htmlBody?: string;
 };
 export type EnquiryServiceDependencies = {
   repository: EnquiryDeliveryRepository;
   getConfig: (key: string) => unknown;
   assertOutboundAllowed: () => void;
   sendMail: (mail: WebsiteEnquiryMail) => Promise<{ id: string | null }>;
+  renderMail?: (payload:EnquiryPayload,form:EnquiryForm)=>Promise<{subject:string;textBody:string;replyTo:string;htmlBody?:string}>;
 };
 export type EnquiryDeliveryResult = { requestId: string; status: 'sent'; deduplicated: boolean };
 export const createWebsiteEnquiryService = (deps: EnquiryServiceDependencies) => async (input: unknown): Promise<EnquiryDeliveryResult> => {
@@ -29,13 +34,15 @@ export const createWebsiteEnquiryService = (deps: EnquiryServiceDependencies) =>
   const name = String(deps.getConfig('STOREFRONT_EMAIL_FROM_NAME') ?? '').trim();
   if (!isEmailAddress(address) || /[\r\n]/.test(name)) throw new HttpError(503, 'Enquiry sender is unavailable.');
   const from = name ? `"${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" <${address}>` : address;
-  const email = renderWebsiteEnquiry(payload, form);
+  const email = deps.renderMail?await deps.renderMail(payload,form):renderWebsiteEnquiry(payload, form);
   const rfcMessageId = `<ktk-staging-enquiry-${payload.requestId}@krawlthroughkrakow.com>`;
   const mail: WebsiteEnquiryMail = { ...email, to: recipients.to.join(', '), ...(recipients.cc.length ? {cc: recipients.cc.join(', ')} : {}), from, rfcMessageId, singleAttempt: true };
   const payloadHash = websiteEnquiryFingerprint({ formId: form.id, schema: payload.schemaSha256, mail });
   // A process explicitly isolated for local development cannot reserve, send or fall back.
   deps.assertOutboundAllowed();
-  const claimed = await deps.repository.reserve({requestId: payload.requestId, formId: form.id, payloadHash, status: 'sending', rfcMessageId, providerMessageId: null});
+  const claimed = await deps.repository.reserve({requestId: payload.requestId, formId: form.id, payloadHash, status: 'sending', rfcMessageId, providerMessageId: null,
+    sourceEnvironment:'staging',customerName:String(payload.fields.name??payload.fields['your-name']??''),customerEmail:email.replyTo,subject:email.subject,
+    enquiryData:{schemaSha256:payload.schemaSha256,fields:structuredClone(payload.fields),labels:Object.fromEntries(form.fields.map(f=>[f.id,f.label])),notification:{...email,to:mail.to,...(mail.cc?{cc:mail.cc}:{}),from},mailbox:address}});
   if (!claimed) {
     const existing = await deps.repository.find(payload.requestId);
     if (!existing || existing.payloadHash !== payloadHash) throw new HttpError(409, 'This enquiry reference is already in use.', {code: 'idempotency_conflict'});

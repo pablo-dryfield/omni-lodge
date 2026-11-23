@@ -92,7 +92,10 @@ it('rejects schema mismatch, undeclared fields, forged activity values and inval
   const p=payloadFor(ENQUIRY_FORMS[5]);
   for(const bad of [{...p,schemaSha256:'f'.repeat(64)},{...p,fields:{...p.fields,extra:'x'}},{...p,fields:{...p.fields,activities:['unoffered activity']}},{...p,fields:{...p.fields,'date-370':'2026-02-30'}},{...p,fields:{...p.fields,'number-people':'-1'}}])expect(()=>validateWebsiteEnquiry(bad)).toThrow();
 });
-it('stores delivery identities but no enquiry message, email address or visitor IP',async()=>{
+it('stores the owner-authorised enquiry snapshot with its delivery identity before sending',async()=>{
   const f=fixture(),p=payloadFor(ENQUIRY_FORMS[0]);await f.submit(p);
-  const stored=JSON.stringify([...f.rows.values()]);expect(stored).not.toContain('local-test@example.test');expect(stored).not.toContain('INTERNAL LOCAL TEST');
+  const stored=f.rows.get(p.requestId)!;expect(stored.enquiryData?.fields).toEqual(p.fields);
+  expect(stored.customerEmail).toBe('local-test@example.test');expect(stored.enquiryData?.notification.textBody).toContain('INTERNAL LOCAL TEST');
+  expect((f.deps.repository.reserve as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan((f.deps.sendMail as jest.Mock).mock.invocationCallOrder[0]);
+  p.fields.message='Changed later';expect(stored.enquiryData?.fields.message).toBe('INTERNAL LOCAL TEST');
 });

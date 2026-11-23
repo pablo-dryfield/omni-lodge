@@ -7,6 +7,8 @@ import BookingEmail from "../models/BookingEmail.js";
 import BookingEvent from "../models/BookingEvent.js";
 import EmailTemplate from "../models/EmailTemplate.js";
 import WebsiteEnquiryDelivery from "../models/WebsiteEnquiryDelivery.js";
+import CustomerEnquiryTemplate from "../models/CustomerEnquiryTemplate.js";
+import CustomerEnquiryEvent from "../models/CustomerEnquiryEvent.js";
 import Channel from "../models/Channel.js";
 import { partnerModels } from "../models/Partner.js";
 import Guest from "../models/Guest.js";
@@ -258,6 +260,8 @@ const sequelize = new Sequelize({
     BookingEvent,
     EmailTemplate,
     WebsiteEnquiryDelivery,
+    CustomerEnquiryTemplate,
+    CustomerEnquiryEvent,
     Channel,
     ChannelCommission,
     ChannelProductPrice,

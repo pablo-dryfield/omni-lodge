@@ -47,6 +47,11 @@ export const HOME_MODULE_GROUPS: Array<{
 ];
 
 export const HOME_MODULE_PRESENTATIONS: Record<string, HomeModulePresentation> = {
+  [PAGE_SLUGS.customerEnquiries]: {
+    description: "Review customer enquiries, follow up with the team, and manage notification templates.",
+    staffDescription: "Review and follow up on the customer enquiries available to you.",
+    group: "operations", tone: "amber", icon: AssignmentRoundedIcon,
+  },
   [PAGE_SLUGS.bookings]: {
     description: "Manage reservations, guests, dates, and booking details.",
     staffDescription: "Find reservations, guest details, dates, and booking information.",

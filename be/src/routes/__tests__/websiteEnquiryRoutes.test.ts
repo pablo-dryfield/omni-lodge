@@ -2,6 +2,7 @@ const mockConfig=jest.fn();
 jest.mock('../../services/configService.js',()=>({getConfigValue:(key:string)=>mockConfig(key),refreshConfigCacheKeys:jest.fn()}));
 jest.mock('../../services/websiteEnquiryRepository.js',()=>({websiteEnquiryRepository:{}}));
 jest.mock('../../services/bookings/gmailClient.js',()=>({sendMessage:jest.fn()}));
+jest.mock('../../services/customerEnquiryTemplates.js',()=>({renderConfiguredEnquiryNotification:jest.fn()}));
 import express from 'express';
 import request from 'supertest';
 import {createHmac} from 'node:crypto';

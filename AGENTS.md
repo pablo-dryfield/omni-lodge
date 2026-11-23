@@ -1,5 +1,12 @@
 # OmniLodge Project Instructions
 
+## Customer Enquiries
+
+- `docs/customer-enquiries.md` describes the staff inbox and per-form notification templates. New signed KTK staging submissions retain an immutable content/notification snapshot alongside their unique delivery identity. Older metadata remains nullable and is shown only when delivery history is requested; historical Gmail import is deferred by the owner.
+- Keep delivery state separate from staff handling status. Never reclaim an uncertain send or introduce automatic retries. Preserve snapshots, provider IDs, version checks and actor/time audit records; non-empty inbox/template/audit data blocks destructive migration rollback.
+- Page/module permissions protect the company-wide inbox and templates. Administrator/Owner are the initial recipients of access; product-scoped accounts remain denied. Template previews use sample details and a sandboxed iframe. Booking email templates and sender/provider settings are separate.
+- Current integration variables/endpoint remain staging-only. Future KTK website production integration requires its own scope and independent settings/signing key. Local full-runtime verification uses a fresh synthetic database with outbound email/background jobs disabled.
+
 ## Search Console Pacific Presets (2026-11-13)
 
 - Final delivery: required CI43329774277 passed, PR255 merged20f0366712b40486925aa8c3229aff26aceb47e8. Immutable Release43331452337 attempt1 and actual managed deploy43333310604 succeeded, host terminal00:06:25.519UTC. Artifact13995757715 innerSHA256 `65ffc620bb6d0049d8cc78fe95e5802d7bbe8193890bb523c3d52fb90e360d29`, all2804 files provenance/checksum verified. Exact public healthy-primary BE/UI/reporting bundle3/3 pass; first0/3 pre-activation report retained. No live-host builds or direct-directory changes.

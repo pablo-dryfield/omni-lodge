@@ -36,6 +36,7 @@ const defaultRoles = [
 ];
 
 const defaultPages = [
+  { slug: 'customer-enquiries', name: 'Customer Enquiries', description: 'Website enquiries and notification templates', sortOrder: 10 },
   { slug: 'dashboard', name: 'Dashboard', description: 'System overview', sortOrder: 1 },
   { slug: 'bookings', name: 'Bookings', description: 'Booking management', sortOrder: 2 },
   { slug: 'bookings-manifest', name: 'Bookings Manifest', description: 'Bookings manifest view', sortOrder: 3 },
@@ -85,6 +86,8 @@ const defaultPages = [
 ];
 
 const defaultModules = [
+  { slug: 'customer-enquiries-inbox', name: 'Customer Enquiries Inbox', pageSlug: 'customer-enquiries', description: 'Review and coordinate enquiry follow-up', componentRef: 'CustomerEnquiries', sortOrder: 1 },
+  { slug: 'customer-enquiry-templates', name: 'Enquiry Email Templates', pageSlug: 'customer-enquiries', description: 'Edit and preview enquiry notification templates', componentRef: 'CustomerEnquiries', sortOrder: 2 },
   { slug: 'dashboard-overview', name: 'Dashboard Overview', pageSlug: 'dashboard', description: 'Key platform metrics', componentRef: 'DashboardOverview', sortOrder: 1 },
   { slug: 'booking-management', name: 'Booking Management', pageSlug: 'bookings', description: 'Create and manage bookings', componentRef: 'BookingTable', sortOrder: 1 },
   { slug: 'bank-transfer-booking-management', name: 'Bank Transfer Bookings', pageSlug: 'bookings', description: 'Create bank-transfer reservations and reconcile received payments', componentRef: 'BankTransferBookingManagement', sortOrder: 2 },
@@ -173,6 +176,7 @@ const rolePageMatrix: Record<string, string[]> = {
   'social-media': ['dashboard', 'bookings', 'bookings-manifest', 'venue-numbers', 'channel-numbers', 'social-media', 'pays', 'cerebro', 'scheduling', 'volunteer-progress'],
 };
 
+for (const role of ['admin', 'owner']) rolePageMatrix[role].push('customer-enquiries');
 rolePageMatrix['administrator'] = [...rolePageMatrix.admin];
 rolePageMatrix['pub-crawl-guide'] = [...rolePageMatrix.guide];
 
@@ -384,6 +388,10 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
   },
 };
 
+for (const role of ['admin', 'owner']) {
+  roleModuleMatrix[role]['customer-enquiries-inbox'] = ['view', 'update'];
+  roleModuleMatrix[role]['customer-enquiry-templates'] = ['view', 'update'];
+}
 roleModuleMatrix['administrator'] = Object.fromEntries(
   Object.entries(roleModuleMatrix.admin).map(([moduleSlug, actions]) => [moduleSlug, [...actions]])
 );
