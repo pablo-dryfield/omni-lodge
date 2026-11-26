@@ -1,4 +1,5 @@
-const mockPermission=jest.fn(),mockPage=jest.fn(),mockPageGrant=jest.fn(),mockScope=jest.fn(),mockList=jest.fn(),mockFind=jest.fn(),mockEvents=jest.fn();
+const mockPermission=jest.fn(),mockPage=jest.fn(),mockPageGrant=jest.fn(),mockScope=jest.fn(),mockList=jest.fn(),mockFind=jest.fn(),mockEvents=jest.fn(),mockConfig=jest.fn();
+jest.mock('../../services/configService.js',()=>({getConfigValue:(...a:any[])=>mockConfig(...a),refreshConfigCacheKeys:jest.fn(async()=>{})}));
 jest.mock('../../middleware/authMiddleware.js',()=>({__esModule:true,default:(req:any,res:any,next:any)=>{if(!req.headers.authorization){res.sendStatus(401);return;}req.authContext={id:1,userTypeId:1,roleSlug:'owner'};next();}}));
 jest.mock('../../middleware/authorizationMiddleware.js',()=>({hasModuleActionPermission:(...args:any[])=>mockPermission(...args)}));
 jest.mock('../../services/productScopeService.js',()=>({getAllowedProductTypeIds:(...args:any[])=>mockScope(...args)}));
@@ -15,7 +16,7 @@ import request from 'supertest';
 import router from '../customerEnquiryRoutes';
 const uuid='00000000-0000-4000-8000-000000000001';
 const app=express();app.use(express.json());app.use('/api/customer-enquiries',router);app.use((e:any,_req:any,res:any,_next:any)=>res.status(e.status||500).json({message:e.message}));
-beforeEach(()=>{jest.clearAllMocks();mockPermission.mockResolvedValue(true);mockPage.mockResolvedValue({id:5});mockPageGrant.mockResolvedValue({id:1});mockScope.mockResolvedValue(null);mockList.mockResolvedValue({rows:[],count:0});});
+beforeEach(()=>{jest.clearAllMocks();mockPermission.mockResolvedValue(true);mockPage.mockResolvedValue({id:5});mockPageGrant.mockResolvedValue({id:1});mockScope.mockResolvedValue(null);mockList.mockResolvedValue({rows:[],count:0});mockConfig.mockReturnValue(false);});
 it('requires authentication before reading customer data',async()=>{expect((await request(app).get('/api/customer-enquiries')).status).toBe(401);expect(mockList).not.toHaveBeenCalled();});
 it.each(['module','page','product-scope'])('refuses %s access before reading any enquiry',async reason=>{
  if(reason==='module')mockPermission.mockResolvedValue(false);if(reason==='page')mockPageGrant.mockResolvedValue(null);if(reason==='product-scope')mockScope.mockResolvedValue([3]);
@@ -37,4 +38,31 @@ it('cannot change delivery identity or send an email through the follow-up endpo
 it('previews escaped templates with sample details and no persistence',async()=>{
  const r=await request(app).post('/api/customer-enquiries/templates/contact/preview').set('Authorization','local-test').send({subjectTemplate:'Hello %%name%%',bodyTemplate:'Email: %%email%%',layout:'branded'});
  expect(r.status).toBe(200);expect(r.body).toMatchObject({sample:true,sent:false});expect(r.body.preview.htmlBody).toContain('customer@example.test');expect(mockEvents).not.toHaveBeenCalled();
+});
+const removalInput={version:1,fingerprint:'a'.repeat(64),confirmation:uuid,reviewedRetention:true,understandsOtherCopies:true,reason:'purpose_ended'};
+it.each(['get','post'] as const)('requires authentication for removal %s',async method=>{
+ const url='/api/customer-enquiries/'+uuid+(method==='get'?'/removal-preview':'/remove-contents');
+ const r=await request(app)[method](url).send(method==='post'?removalInput:undefined);
+ expect(r.status).toBe(401);expect(mockFind).not.toHaveBeenCalled();
+});
+it.each(['get','post'] as const)('requires separate delete permission for removal %s',async method=>{
+ mockPermission.mockImplementation(async(_req:any,_module:string,action:string)=>action!=='delete');
+ const url='/api/customer-enquiries/'+uuid+(method==='get'?'/removal-preview':'/remove-contents');
+ const r=await request(app)[method](url).set('Authorization','local-test').send(method==='post'?removalInput:undefined);
+ expect(r.status).toBe(403);expect(mockFind).not.toHaveBeenCalled();expect(mockEvents).not.toHaveBeenCalled();
+});
+it('fails closed while the execution setting is disabled before loading or changing a record',async()=>{
+ const r=await request(app).post('/api/customer-enquiries/'+uuid+'/remove-contents').set('Authorization','local-test').send(removalInput);
+ expect(r.status).toBe(423);expect(mockFind).not.toHaveBeenCalled();expect(mockEvents).not.toHaveBeenCalled();
+});
+it('allows a no-store preview while disabled without including customer contents',async()=>{
+ mockFind.mockResolvedValue({requestId:uuid,version:1,formId:'contact',sourceEnvironment:'staging',handlingStatus:'closed',status:'sent',staffNotes:'DO-NOT-RETURN',enquiryData:null,providerMessageId:null});
+ const r=await request(app).get('/api/customer-enquiries/'+uuid+'/removal-preview').set('Authorization','local-test');
+ expect(r.status).toBe(200);expect(r.headers['cache-control']).toBe('private, no-store');expect(r.body.canExecute).toBe(false);
+ expect(JSON.stringify(r.body)).not.toContain('DO-NOT-RETURN');expect(mockEvents).not.toHaveBeenCalled();
+});
+it('refuses follow-up writes after removal',async()=>{
+ const update=jest.fn();mockFind.mockResolvedValue({version:2,redactedAt:new Date(),update});
+ const r=await request(app).patch('/api/customer-enquiries/'+uuid).set('Authorization','local-test').send({version:2,handlingStatus:'new',assignedTo:null,staffNotes:'restore'});
+ expect(r.status).toBe(409);expect(update).not.toHaveBeenCalled();expect(mockEvents).not.toHaveBeenCalled();
 });

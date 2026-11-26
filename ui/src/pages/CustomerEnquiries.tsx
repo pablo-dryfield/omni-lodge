@@ -5,10 +5,12 @@ import {useDebouncedValue,useMediaQuery} from '@mantine/hooks';
 import {PageAccessGuard} from '../components/access/PageAccessGuard';
 import {useModuleAccess} from '../hooks/useModuleAccess';
 import {PAGE_SLUGS} from '../constants/pageSlugs';
-import {enquiryApi,type CustomerEnquiry,type EnquiryDetail,type EnquiryHandlingStatus,type EnquiryPreview,type EnquiryTemplate} from '../api/customerEnquiries';
+import {enquiryApi,type CustomerEnquiry,type EnquiryDetail,type EnquiryList,type EnquiryHandlingStatus,type EnquiryPreview,type EnquiryTemplate,type EnquiryRemovalReceipt} from '../api/customerEnquiries';
+import CustomerEnquiryRemoval from './CustomerEnquiryRemoval';
 
 const statuses=[{value:'new',label:'New'},{value:'in_progress',label:'In progress'},{value:'replied',label:'Replied'},{value:'closed',label:'Closed'}];
 const statusLabel=(v:string)=>statuses.find(s=>s.value===v)?.label??v;
+const customerLabel=(r:CustomerEnquiry)=>r.redactedAt?'Contents removed':r.customerName||'Earlier delivery record';
 const date=(v:string)=>new Date(v).toLocaleString();
 const errorMessage=(e:unknown,fallback:string)=>{
  const data=(e as {response?:{data?:unknown}})?.response?.data;
@@ -23,23 +25,33 @@ function Detail({id,onClose,assignees}:{id:string;onClose:()=>void;assignees:{id
  useEffect(()=>{if(query.data)setDraft(current=>current??fromRow(query.data!));},[query.data]);
  const row=query.data;
  const save=async()=>{if(!draft)return;setBusy(true);setError('');try{await enquiryApi.update(id,draft);await cache.invalidateQueries({queryKey:['customer-enquiries']});const latest=await query.refetch();if(latest.data)setDraft(fromRow(latest.data));}catch(e){setError(errorMessage(e,'Unable to save. Your draft has been kept.'));}finally{setBusy(false);}};
+ const removed=async(receipt:EnquiryRemovalReceipt)=>{
+  if(!row)return;
+  const cleared:EnquiryDetail={...row,...receipt,customerName:null,customerEmail:null,subject:null,enquiryData:null,staffNotes:'',assignedTo:null,events:[]};
+  // Clear previously displayed contents before any network readback; a failed refresh must not restore them.
+  cache.setQueryData(['customer-enquiry',id],cleared);setDraft(fromRow(cleared));
+  cache.setQueriesData<EnquiryList>({queryKey:['customer-enquiries']},(current:EnquiryList|undefined)=>current?{...current,rows:current.rows.map((r:CustomerEnquiry)=>r.requestId===id?{...r,version:receipt.version,redactedAt:receipt.redactedAt,customerName:null,customerEmail:null,subject:null,assignedTo:null}:r)}:current);
+  await cache.invalidateQueries({queryKey:['customer-enquiries']});
+  await query.refetch();
+ };
  return <Modal opened onClose={onClose} title="Customer enquiry" closeButtonProps={{'aria-label':'Close enquiry'}} size="xl" fullScreen={useMediaQuery('(max-width: 600px)')}>
   {query.isLoading&&<Loader aria-label="Loading enquiry"/>}
   {query.isError&&<Alert color="red">Unable to load the enquiry. <Button onClick={()=>void query.refetch()}>Retry</Button></Alert>}
   {row&&draft&&<Stack style={{overflowWrap:'anywhere',minWidth:0}}>
-   <Group><Badge color="yellow">{row.sourceEnvironment}</Badge><Badge>{statusLabel(row.handlingStatus)}</Badge><Badge color={row.deliveryStatus==='sent'?'green':'orange'}>Email: {row.deliveryStatus}</Badge></Group>
+   <Group><Badge color="yellow">{row.sourceEnvironment}</Badge><Badge>{statusLabel(row.handlingStatus)}</Badge><Badge color={row.deliveryStatus==='sent'?'green':'orange'}>Email: {row.deliveryStatus}</Badge>{row.redactedAt&&<Badge color="gray">Contents removed</Badge>}</Group>
    <Title order={3}>{row.subject||row.formId}</Title><Text size="sm" c="dimmed">{date(row.createdAt)} · {row.requestId}</Text>
    {row.gmailUrl&&<Anchor href={row.gmailUrl} target="_blank" rel="noopener noreferrer">Open notification in Gmail</Anchor>}
    {row.deliveryStatus!=='sent'&&<Alert color="orange">Email delivery is not confirmed. The saved enquiry is available here; check Gmail before sending any message.</Alert>}
-   {row.enquiryData?<><Divider label="Customer details"/>{Object.entries(row.enquiryData.fields).map(([key,value])=><div key={key}><Text fw={600} size="sm">{row.enquiryData!.labels[key]||key}</Text><Text style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{Array.isArray(value)?value.join(', '):value||'—'}</Text></div>)}<Divider label="Email notification"/><Text size="sm">To: {row.enquiryData.notification.to}{row.enquiryData.notification.cc?` · Cc: ${row.enquiryData.notification.cc}`:''}</Text><Text size="sm">Reply-To: {row.enquiryData.notification.replyTo}</Text><Text component="pre" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',fontFamily:'inherit'}}>{row.enquiryData.notification.textBody}</Text></>:<Alert>Delivery record only. Full form contents were not stored before Customer Enquiries was introduced.</Alert>}
+   {row.enquiryData?<><Divider label="Customer details"/>{Object.entries(row.enquiryData.fields).map(([key,value])=><div key={key}><Text fw={600} size="sm">{row.enquiryData!.labels[key]||key}</Text><Text style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{Array.isArray(value)?value.join(', '):value||'—'}</Text></div>)}<Divider label="Email notification"/><Text size="sm">To: {row.enquiryData.notification.to}{row.enquiryData.notification.cc?` · Cc: ${row.enquiryData.notification.cc}`:''}</Text><Text size="sm">Reply-To: {row.enquiryData.notification.replyTo}</Text><Text component="pre" style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',fontFamily:'inherit'}}>{row.enquiryData.notification.textBody}</Text></>:row.redactedAt?<Alert>Enquiry contents removed on {date(row.redactedAt)}. Delivery identifiers remain. Gmail, backups and exports were not changed; wider removal is not complete.</Alert>:<Alert>Delivery record only. Full form contents were not stored before Customer Enquiries was introduced.</Alert>}
    <Divider label="Team follow-up"/>
-   <Select label="Handling status" data={statuses} value={draft.handlingStatus} onChange={v=>v&&setDraft({...draft,handlingStatus:v as EnquiryHandlingStatus})} disabled={!permissions.canUpdate||busy}/>
-   <Select label="Assigned team member" placeholder="Unassigned" clearable searchable data={assignees.map(a=>({value:String(a.id),label:a.name}))} value={draft.assignedTo===null?null:String(draft.assignedTo)} onChange={v=>setDraft({...draft,assignedTo:v?Number(v):null})} disabled={!permissions.canUpdate||busy}/>
-   <Textarea label="Internal notes" minRows={4} maxLength={20000} value={draft.staffNotes} onChange={e=>setDraft({...draft,staffNotes:e.currentTarget.value})} disabled={!permissions.canUpdate||busy}/>
+   <Select label="Handling status" data={statuses} value={draft.handlingStatus} onChange={v=>v&&setDraft({...draft,handlingStatus:v as EnquiryHandlingStatus})} disabled={!permissions.canUpdate||busy||!!row.redactedAt}/>
+   <Select label="Assigned team member" placeholder="Unassigned" clearable searchable data={assignees.map(a=>({value:String(a.id),label:a.name}))} value={draft.assignedTo===null?null:String(draft.assignedTo)} onChange={v=>setDraft({...draft,assignedTo:v?Number(v):null})} disabled={!permissions.canUpdate||busy||!!row.redactedAt}/>
+   <Textarea label="Internal notes" minRows={4} maxLength={20000} value={draft.staffNotes} onChange={e=>setDraft({...draft,staffNotes:e.currentTarget.value})} disabled={!permissions.canUpdate||busy||!!row.redactedAt}/>
    <Text size="sm" c="dimmed">Mark “Replied” after a team member has answered the customer. Opening Gmail does not send a reply.</Text>
    {error&&<Alert color="red">{error}<Button variant="subtle" onClick={async()=>{const latest=await query.refetch();if(latest.data){setDraft(fromRow(latest.data));setError('');}}}>Reload latest</Button></Alert>}
-   {permissions.canUpdate&&<Button onClick={()=>void save()} loading={busy}>Save follow-up</Button>}
-   {row.events.length>0&&<><Divider label="Activity"/>{row.events.map(e=><Text size="sm" key={e.id}>{date(e.createdAt)} · Team member #{e.actorId} · {e.kind==='enquiry.updated'?'Updated follow-up':e.kind}</Text>)}</>}
+   {permissions.canUpdate&&!row.redactedAt&&<Button onClick={()=>void save()} loading={busy}>Save follow-up</Button>}
+   {permissions.canDelete&&!row.redactedAt&&!busy&&<CustomerEnquiryRemoval id={id} hasUnsavedChanges={JSON.stringify(draft)!==JSON.stringify(fromRow(row))} onRemoved={removed}/>}
+   {row.events.length>0&&<><Divider label="Activity"/>{row.events.map(e=><Text size="sm" key={e.id}>{date(e.createdAt)} · Team member #{e.actorId} · {e.kind==='enquiry.updated'?'Updated follow-up':e.kind==='enquiry.contents_removed'?'Removed enquiry contents':e.kind}</Text>)}</>}
   </Stack>}
  </Modal>;
 }
@@ -74,14 +86,14 @@ function Inbox(){
  const query=useQuery({queryKey:['customer-enquiries',q,form,status,delivery,history,page],queryFn:()=>enquiryApi.list({q,formId:form??'',handlingStatus:status??'',deliveryStatus:delivery??'',includeLegacy:history?'1':'0',limit:25,offset:(page-1)*25}),enabled:access.canView,refetchOnWindowFocus:false,retry:false});
  const data=query.data;
  if(!access.canView)return <Alert>You do not have access to the enquiry inbox.</Alert>;
- const badges=(r:CustomerEnquiry)=><Group gap="xs"><Badge>{statusLabel(r.handlingStatus)}</Badge><Badge color={r.deliveryStatus==='sent'?'green':'orange'}>Email: {r.deliveryStatus}</Badge><Badge color="yellow">{r.sourceEnvironment}</Badge></Group>;
+ const badges=(r:CustomerEnquiry)=><Group gap="xs"><Badge>{statusLabel(r.handlingStatus)}</Badge><Badge color={r.deliveryStatus==='sent'?'green':'orange'}>Email: {r.deliveryStatus}</Badge><Badge color="yellow">{r.sourceEnvironment}</Badge>{r.redactedAt&&<Badge color="gray">Contents removed</Badge>}</Group>;
  return <Stack mt="md">
   <SimpleGrid cols={{base:1,sm:2,lg:4}}><TextInput label="Search enquiries" placeholder="Name, email or subject" maxLength={200} value={search} onChange={e=>setSearch(e.currentTarget.value)}/><Select label="Form" placeholder="All forms" clearable data={(data?.forms??[]).map(f=>({value:f.id,label:f.title}))} value={form} onChange={setForm}/><Select label="Handling status" placeholder="All statuses" clearable data={statuses} value={status} onChange={setStatus}/><Select label="Email delivery" placeholder="All deliveries" clearable data={['sending','sent','uncertain']} value={delivery} onChange={setDelivery}/></SimpleGrid>
-  <Checkbox label="Include earlier delivery records" checked={history} onChange={e=>setHistory(e.currentTarget.checked)}/>
+  <Checkbox label="Include earlier delivery records" description="Also shows records whose contents were removed." checked={history} onChange={e=>setHistory(e.currentTarget.checked)}/>
   <Group justify="space-between"><Text>{data?`${data.count} enquiries`:'Enquiries'}</Text><Button variant="default" onClick={()=>void query.refetch()} disabled={query.isFetching}>{query.isFetching?'Refreshing…':'Refresh'}</Button></Group>
   {query.isLoading&&<Loader aria-label="Loading enquiries"/>}{query.isError&&<Alert color="red">Unable to load enquiries. Please retry.</Alert>}
   {data&&data.rows.length===0&&<Card withBorder><Text fw={600}>No enquiries found</Text><Text c="dimmed">New website submissions will appear here. Try clearing the filters.</Text></Card>}
-  {data&&data.rows.length>0&&(mobile?<Stack>{data.rows.map(r=><Card withBorder key={r.requestId}><Stack gap="sm">{badges(r)}<Text fw={600}>{r.subject||r.formId}</Text><Text size="sm">{r.customerName||'Earlier delivery record'} · {date(r.createdAt)}</Text><Button variant="light" onClick={()=>setSelected(r.requestId)}>Open enquiry</Button></Stack></Card>)}</Stack>:<Table.ScrollContainer minWidth={850}><Table striped highlightOnHover><Table.Thead><Table.Tr><Table.Th>Received</Table.Th><Table.Th>Customer</Table.Th><Table.Th>Enquiry</Table.Th><Table.Th>Status</Table.Th><Table.Th>Assigned</Table.Th><Table.Th>Details</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{data.rows.map(r=><Table.Tr key={r.requestId}><Table.Td>{date(r.createdAt)}</Table.Td><Table.Td><Text size="sm">{r.customerName||'Earlier delivery record'}</Text><Text size="xs">{r.customerEmail}</Text></Table.Td><Table.Td>{r.subject||r.formId}</Table.Td><Table.Td>{badges(r)}</Table.Td><Table.Td>{data.assignees.find(a=>a.id===r.assignedTo)?.name||'Unassigned'}</Table.Td><Table.Td><Button size="xs" variant="light" onClick={()=>setSelected(r.requestId)}>Open enquiry</Button></Table.Td></Table.Tr>)}</Table.Tbody></Table></Table.ScrollContainer>)}
+  {data&&data.rows.length>0&&(mobile?<Stack>{data.rows.map(r=><Card withBorder key={r.requestId}><Stack gap="sm">{badges(r)}<Text fw={600}>{r.subject||r.formId}</Text><Text size="sm">{customerLabel(r)} · {date(r.createdAt)}</Text><Button variant="light" onClick={()=>setSelected(r.requestId)}>Open enquiry</Button></Stack></Card>)}</Stack>:<Table.ScrollContainer minWidth={850}><Table striped highlightOnHover><Table.Thead><Table.Tr><Table.Th>Received</Table.Th><Table.Th>Customer</Table.Th><Table.Th>Enquiry</Table.Th><Table.Th>Status</Table.Th><Table.Th>Assigned</Table.Th><Table.Th>Details</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{data.rows.map(r=><Table.Tr key={r.requestId}><Table.Td>{date(r.createdAt)}</Table.Td><Table.Td><Text size="sm">{customerLabel(r)}</Text><Text size="xs">{r.customerEmail}</Text></Table.Td><Table.Td>{r.subject||r.formId}</Table.Td><Table.Td>{badges(r)}</Table.Td><Table.Td>{data.assignees.find(a=>a.id===r.assignedTo)?.name||'Unassigned'}</Table.Td><Table.Td><Button size="xs" variant="light" onClick={()=>setSelected(r.requestId)}>Open enquiry</Button></Table.Td></Table.Tr>)}</Table.Tbody></Table></Table.ScrollContainer>)}
   {data&&data.count>25&&<Pagination total={Math.ceil(data.count/25)} value={page} onChange={setPage} aria-label="Enquiry pages"/>}
   {selected&&<Detail key={selected} id={selected} onClose={()=>setSelected(null)} assignees={data?.assignees??[]}/>}
  </Stack>;

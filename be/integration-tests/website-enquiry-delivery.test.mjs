@@ -1,7 +1,10 @@
 import{test}from'node:test';import assert from'node:assert/strict';import{randomBytes,randomUUID}from'node:crypto';import fs from'node:fs';import dotenv from'dotenv';import pg from'pg';import{Sequelize}from'sequelize-typescript';
 import WebsiteEnquiryDelivery from'../src/models/WebsiteEnquiryDelivery.ts';
+import CustomerEnquiryEvent from'../src/models/CustomerEnquiryEvent.ts';
 import{up,down}from'../src/migrations/202611220001-website-enquiry-deliveries.ts';
 import{up as upInbox,down as downInbox}from'../src/migrations/202611230001-customer-enquiries.ts';
+import{up as upRemoval,down as downRemoval}from'../src/migrations/202611260001-customer-enquiry-removal.ts';
+import{previewEnquiryRemoval,removeEnquiryContents}from'../src/services/customerEnquiryRemoval.ts';
 import{websiteEnquiryRepository}from'../src/services/websiteEnquiryRepository.ts';
 import{createWebsiteEnquiryService}from'../src/services/websiteEnquiryService.ts';
 import{ENQUIRY_FORMS,ENQUIRY_SCHEMA_SHA256}from'../src/services/websiteEnquiryContract.ts';
@@ -34,9 +37,10 @@ test('local PostgreSQL uniquely reserves enquiry deliveries, retains uncertainty
    INSERT INTO users VALUES(1);INSERT INTO "userTypes" VALUES(1,'admin'),(2,'owner'),(3,'manager');INSERT INTO actions(key)VALUES('view'),('update'),('create'),('delete');`);
   const legacyId=randomUUID();await control.query(`INSERT INTO website_enquiry_deliveries(request_id,form_id,payload_hash,status,rfc_message_id)VALUES($1,'contact',$2,'sent','<historical@test>')`,[legacyId,'a'.repeat(64)]);
   await upInbox({context});
+  await upRemoval({context});
   assert.equal((await control.query('SELECT enquiry_data FROM website_enquiry_deliveries WHERE request_id=$1',[legacyId])).rows[0].enquiry_data,null,'Historical contents are never invented or imported');
   assert.equal((await control.query('SELECT count(*)::int AS n FROM "roleModulePermissions" WHERE "userTypeId"=3')).rows[0].n,0,'New inbox is not granted to other roles');
-  orm=new Sequelize({dialect:'postgres',host:config.host,port:config.port,database:config.database,username:config.user,password:config.password,logging:false,models:[WebsiteEnquiryDelivery],define:{schema},pool:{max:3,min:0}});
+  orm=new Sequelize({dialect:'postgres',host:config.host,port:config.port,database:config.database,username:config.user,password:config.password,logging:false,models:[WebsiteEnquiryDelivery,CustomerEnquiryEvent],define:{schema},pool:{max:3,min:0}});
   assert.equal(WebsiteEnquiryDelivery.getTableName().schema,schema,'ORM and migration must share only the owned schema');
   let release;const pending=new Promise(resolve=>{release=resolve;});const captured=[];
   const service=createWebsiteEnquiryService({repository:websiteEnquiryRepository,getConfig:key=>key==='STOREFRONT_EMAIL_FROM_ADDRESS'?'pubthroughkrakow@gmail.com':key==='STOREFRONT_EMAIL_FROM_NAME'?'Krawl Through Krakow':undefined,
@@ -58,6 +62,35 @@ test('local PostgreSQL uniquely reserves enquiry deliveries, retains uncertainty
   const saved=records.find(r=>r.requestId===payload.requestId);assert.equal(saved.customerEmail,'local-postgres@example.test');assert.deepEqual(saved.enquiryData.fields,fields);
   assert.equal(saved.handlingStatus,'new');assert.equal(saved.sourceEnvironment,'staging');assert.equal(saved.enquiryData.notification.subject,saved.subject);
   assert.deepEqual(records.find(r=>r.requestId===unknown.requestId).enquiryData.fields,fields,'Uncertain email still retains the enquiry');
+  // Actual transactional removal in this task-owned schema, never a production row or Gmail call.
+  await control.query(`CREATE TABLE protected_fixture(id INTEGER PRIMARY KEY,contents JSONB NOT NULL);
+    INSERT INTO protected_fixture VALUES(1,'{"booking":"untouched","payment":"untouched","recovery":"untouched"}');`);
+  const protectedBefore=(await control.query('SELECT * FROM protected_fixture')).rows;
+  const removable=await WebsiteEnquiryDelivery.findByPk(payload.requestId);
+  await removable.update({handlingStatus:'closed',staffNotes:'LOCAL PRIVATE NOTE',assignedTo:1,version:2});
+  await CustomerEnquiryEvent.create({requestId:payload.requestId,formId:'contact',kind:'enquiry.updated',actorId:1,changes:{privateDetail:'LOCAL AUDIT CONTENT'}});
+  const history=await CustomerEnquiryEvent.findAll({where:{requestId:payload.requestId},order:[['id','ASC']]});
+  const preview=previewEnquiryRemoval(removable,history,true);
+  const confirmation={version:2,fingerprint:preview.fingerprint,confirmation:payload.requestId,reviewedRetention:true,understandsOtherCopies:true,reason:'purpose_ended'};
+  assert.equal(preview.canExecute,true);assert.equal(previewEnquiryRemoval(removable,history,false).canExecute,false);
+  const immutableBefore=Object.fromEntries(['requestId','payloadHash','rfcMessageId','providerMessageId','status','sentAt','createdAt'].map(k=>[k,removable[k]]));
+  // A failure after the writes must roll back contents and activity, not leave partial erasure.
+  await assert.rejects(orm.transaction(async transaction=>{await removeEnquiryContents(payload.requestId,confirmation,1,transaction);throw Error('SIMULATED COMMIT REFUSAL');}),/SIMULATED COMMIT REFUSAL/);
+  assert.equal((await WebsiteEnquiryDelivery.findByPk(payload.requestId)).staffNotes,'LOCAL PRIVATE NOTE');
+  assert.equal((await CustomerEnquiryEvent.findAll({where:{requestId:payload.requestId}})).length,1);
+  // Concurrent confirmations serialize: exactly one succeeds and one reports the retained tombstone.
+  const parallel=await Promise.allSettled([1,2].map(()=>orm.transaction(transaction=>removeEnquiryContents(payload.requestId,confirmation,1,transaction))));
+  assert.equal(parallel.filter(r=>r.status==='fulfilled').length,1);assert.equal(parallel.filter(r=>r.status==='rejected'&&r.reason.status===409).length,1);
+  const removed=await WebsiteEnquiryDelivery.findByPk(payload.requestId);
+  assert.ok(removed.redactedAt);assert.equal(removed.version,3);assert.equal(removed.enquiryData,null);assert.equal(removed.customerEmail,null);assert.equal(removed.customerName,null);assert.equal(removed.subject,null);assert.equal(removed.staffNotes,'');assert.equal(removed.assignedTo,null);
+  assert.deepEqual(Object.fromEntries(Object.keys(immutableBefore).map(k=>[k,removed[k]])),immutableBefore);
+  const retainedEvents=await CustomerEnquiryEvent.findAll({where:{requestId:payload.requestId},order:[['id','ASC']]});
+  assert.equal(retainedEvents.length,2);assert.deepEqual(retainedEvents[0].changes,{detailsRemoved:true});assert.equal(retainedEvents[1].kind,'enquiry.contents_removed');
+  assert.equal((await service(payload)).deduplicated,true);assert.equal(captured.length,1,'Removed contents must never reset a send reservation');
+  await assert.rejects(control.query('UPDATE website_enquiry_deliveries SET customer_email=$1 WHERE request_id=$2',['restore@example.test',payload.requestId]),/customer_enquiry_redacted_contents_ck/);
+  await assert.rejects(control.query('UPDATE website_enquiry_deliveries SET redacted_at=NULL WHERE request_id=$1',[payload.requestId]),/Retain the enquiry removal tombstone/);
+  await assert.rejects(downRemoval({context}),/redacted records cannot be rolled back/);
+  assert.deepEqual((await control.query('SELECT * FROM protected_fixture')).rows,protectedBefore);
   await assert.rejects(downInbox({context}),/non-empty data cannot be rolled back/);
   assert.equal((await control.query('SELECT count(*)::int AS n FROM website_enquiry_deliveries')).rows[0].n,3);
   await assert.rejects(control.query(`INSERT INTO customer_enquiry_templates(form_id,subject_template,body_template,layout)VALUES('contact','Subject','Body','script')`),/check constraint/);
@@ -67,7 +100,9 @@ test('local PostgreSQL uniquely reserves enquiry deliveries, retains uncertainty
   await assert.rejects(control.query(`INSERT INTO website_enquiry_deliveries(request_id,form_id,payload_hash,status,rfc_message_id) VALUES($1,'contact',$2,'invalid','<local@test>')`,[randomUUID(),'f'.repeat(64)]),/website_enquiry_delivery_status_ck/);
   await assert.rejects(down({context}),/non-empty delivery table cannot be removed/);
   assert.equal((await WebsiteEnquiryDelivery.count()),3,'Refused rollback retains old and new deduplication records');
+  await CustomerEnquiryEvent.destroy({where:{requestId:records.map(x=>x.requestId)}});
   await WebsiteEnquiryDelivery.destroy({where:{requestId:records.map(x=>x.requestId)}});
+  await downRemoval({context});
   await downInbox({context});
   await down({context});
  }finally{

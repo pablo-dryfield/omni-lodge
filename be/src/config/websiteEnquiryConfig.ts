@@ -12,6 +12,11 @@ export const WEBSITE_ENQUIRY_CONFIG_KEYS = [
 
 export const WEBSITE_ENQUIRY_CONFIG: ConfigDefinition[] = [
   {
+    key: 'STAGING_CUSTOMER_ENQUIRY_REMOVAL_ENABLED', label: 'KTK staging enquiry contents removal enabled', category: 'Website enquiries',
+    description: 'Disabled by default. Permits separately authorised inbox users to remove contents only after an exact preview and explicit confirmation. Does not delete Gmail, backups, exports, bookings or delivery deduplication identities. Preview works while disabled. Changes apply on the next request; enabling requires the owner-approved real-data removal process.',
+    valueType: 'boolean', defaultValue: false, impact: 'high',
+  },
+  {
     key: 'STAGING_WEBSITE_ENQUIRY_ENABLED', label: 'KTK staging enquiry delivery enabled', category: 'Website enquiries',
     description: 'Allow only the signed KTK staging enquiry endpoint. Disabled by default. Does not enable production website forms or alter order emails. Changes apply on the next request.',
     valueType: 'boolean', defaultValue: false, impact: 'high',
