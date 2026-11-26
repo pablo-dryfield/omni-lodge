@@ -389,7 +389,7 @@ const roleModuleMatrix: Record<string, Record<string, string[]>> = {
 };
 
 for (const role of ['admin', 'owner']) {
-  roleModuleMatrix[role]['customer-enquiries-inbox'] = ['view', 'update'];
+  roleModuleMatrix[role]['customer-enquiries-inbox'] = ['view', 'update', 'delete'];
   roleModuleMatrix[role]['customer-enquiry-templates'] = ['view', 'update'];
 }
 roleModuleMatrix['administrator'] = Object.fromEntries(

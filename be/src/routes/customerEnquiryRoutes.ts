@@ -14,6 +14,8 @@ import Page from '../models/Page.js';
 import User from '../models/User.js';
 import {ENQUIRY_FORMS} from '../services/websiteEnquiryContract.js';
 import {enquiryFormById,enquirySamplePayload,enquiryTemplateDefaults,renderEnquiryTemplate,validateEnquiryTemplate} from '../services/customerEnquiryTemplates.js';
+import {getConfigValue,refreshConfigCacheKeys} from '../services/configService.js';
+import {ENQUIRY_REMOVAL_KEY,previewEnquiryRemoval,removeEnquiryContents,validateRemovalInput} from '../services/customerEnquiryRemoval.js';
 
 const router=Router();
 const statuses=['new','in_progress','replied','closed'];
@@ -27,7 +29,7 @@ export async function assertEnquiryPermission(req:AuthenticatedRequest,module:st
 const requirePermission=(module:string,action:string)=>(req:AuthenticatedRequest,res:Response,next:NextFunction)=>{void assertEnquiryPermission(req,module,action).then(()=>next(),next);};
 const integer=(value:unknown,fallback:number,max:number)=>{const n=value===undefined?fallback:Number(value);if(!Number.isSafeInteger(n)||n<0||n>max)throw new HttpError(400,'Invalid pagination.');return n;};
 const id=(value:string)=>{if(!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value))throw new HttpError(400,'Invalid enquiry reference.');return value;};
-const summary=(r:WebsiteEnquiryDelivery)=>({requestId:r.requestId,formId:r.formId,sourceEnvironment:r.sourceEnvironment,customerName:r.customerName,customerEmail:r.customerEmail,subject:r.subject,deliveryStatus:r.status,handlingStatus:r.handlingStatus,assignedTo:r.assignedTo,version:r.version,createdAt:r.createdAt,sentAt:r.sentAt});
+const summary=(r:WebsiteEnquiryDelivery)=>({requestId:r.requestId,formId:r.formId,sourceEnvironment:r.sourceEnvironment,customerName:r.customerName,customerEmail:r.customerEmail,subject:r.subject,deliveryStatus:r.status,handlingStatus:r.handlingStatus,assignedTo:r.assignedTo,version:r.version,createdAt:r.createdAt,sentAt:r.sentAt,redactedAt:r.redactedAt??null});
 router.use(authMiddleware,(_req,res,next)=>{res.setHeader('Cache-Control','private, no-store');next();});
 router.get('/templates',requirePermission('customer-enquiry-templates','view'),route(async(_req,res)=>{
   const saved=await CustomerEnquiryTemplate.findAll();
@@ -73,11 +75,31 @@ router.get('/:requestId',requirePermission('customer-enquiries-inbox','view'),ro
   const gmailUrl=row.providerMessageId&&/^[a-f0-9]{12,64}$/i.test(row.providerMessageId)?'https://mail.google.com/mail/u/?authuser='+encodeURIComponent(row.enquiryData?.mailbox??'pubthroughkrakow@gmail.com')+'#all/'+row.providerMessageId:null;
   res.json({...summary(row),enquiryData:row.enquiryData,staffNotes:row.staffNotes,rfcMessageId:row.rfcMessageId,providerMessageId:row.providerMessageId,gmailUrl,events:events.map(e=>({id:e.id,kind:e.kind,actorId:e.actorId,changes:e.changes,createdAt:e.createdAt}))});
 }));
+router.get('/:requestId/removal-preview',requirePermission('customer-enquiries-inbox','view'),requirePermission('customer-enquiries-inbox','delete'),route(async(req,res)=>{
+  const requestId=id(req.params.requestId);
+  await refreshConfigCacheKeys([ENQUIRY_REMOVAL_KEY]);
+  // Read a consistent preview under the same row lock used by follow-up/removal.
+  const preview=await sequelize.transaction(async transaction=>{
+    const row=await WebsiteEnquiryDelivery.findByPk(requestId,{transaction,lock:transaction.LOCK.UPDATE});
+    if(!row)throw new HttpError(404,'Enquiry not found.');
+    const events=await CustomerEnquiryEvent.findAll({where:{requestId},order:[['id','ASC']],transaction,lock:transaction.LOCK.UPDATE});
+    return previewEnquiryRemoval(row,events,getConfigValue(ENQUIRY_REMOVAL_KEY)===true);
+  });
+  res.json(preview);
+}));
+router.post('/:requestId/remove-contents',requirePermission('customer-enquiries-inbox','view'),requirePermission('customer-enquiries-inbox','delete'),route(async(req,res)=>{
+  const requestId=id(req.params.requestId),input=validateRemovalInput(req.body,requestId);
+  await refreshConfigCacheKeys([ENQUIRY_REMOVAL_KEY]);
+  if(getConfigValue(ENQUIRY_REMOVAL_KEY)!==true)throw new HttpError(423,'Contents removal is disabled. No record was changed.');
+  const receipt=await sequelize.transaction(transaction=>removeEnquiryContents(requestId,input,req.authContext!.id,transaction));
+  res.json(receipt);
+}));
 router.patch('/:requestId',requirePermission('customer-enquiries-inbox','update'),route(async(req,res)=>{
   const requestId=id(req.params.requestId),v=req.body;
   if(!v||typeof v!=='object'||Object.keys(v).some(k=>!['version','handlingStatus','assignedTo','staffNotes'].includes(k))||!Number.isSafeInteger(v.version)||v.version<1||!statuses.includes(v.handlingStatus)||typeof v.staffNotes!=='string'||Buffer.byteLength(v.staffNotes)>20000||(v.assignedTo!==null&&(!Number.isSafeInteger(v.assignedTo)||v.assignedTo<1)))throw new HttpError(400,'Choose a status, an optional assignee and notes up to20000 bytes.');
   const row=await sequelize.transaction(async transaction=>{
     const r=await WebsiteEnquiryDelivery.findByPk(requestId,{transaction,lock:transaction.LOCK.UPDATE});if(!r)throw new HttpError(404,'Enquiry not found.');
+    if(r.redactedAt)throw new HttpError(409,'Removed enquiry contents cannot be edited or restored through follow-up.');
     if(r.version!==v.version)throw new HttpError(409,'This enquiry changed in another session. Reload before saving; your draft has been kept.');
     if(v.assignedTo!==null&&!await User.findOne({where:{id:v.assignedTo,status:true},attributes:['id'],transaction}))throw new HttpError(400,'Choose an active team member.');
     await CustomerEnquiryEvent.create({requestId,formId:r.formId,kind:'enquiry.updated',actorId:req.authContext!.id,changes:{before:{handlingStatus:r.handlingStatus,assignedTo:r.assignedTo},after:{handlingStatus:v.handlingStatus,assignedTo:v.assignedTo},notesChanged:r.staffNotes!==v.staffNotes,version:r.version+1}},{transaction});

@@ -1,6 +1,6 @@
 import { AllowNull, Column, CreatedAt, DataType, Default, Model, PrimaryKey, Table, UpdatedAt } from 'sequelize-typescript';
 
-/** Delivery identity plus an immutable snapshot for new Customer Enquiries. Older snapshots remain null. */
+/** Delivery identity plus a snapshot; only the explicit reviewed-removal workflow may clear contents. */
 @Table({ timestamps: true, modelName: 'WebsiteEnquiryDelivery', tableName: 'website_enquiry_deliveries' })
 export default class WebsiteEnquiryDelivery extends Model {
   @PrimaryKey @Column({ field: 'request_id', type: DataType.UUID }) declare requestId: string;
@@ -19,6 +19,8 @@ export default class WebsiteEnquiryDelivery extends Model {
   @AllowNull(true) @Column({field:'assigned_to',type:DataType.INTEGER}) declare assignedTo: number | null;
   @AllowNull(false) @Default('') @Column({field:'staff_notes',type:DataType.TEXT}) declare staffNotes: string;
   @AllowNull(false) @Default(1) @Column(DataType.INTEGER) declare version: number;
+  @AllowNull(true) @Column({field:'redacted_at',type:DataType.DATE}) declare redactedAt: Date | null;
+  @AllowNull(true) @Column({field:'redacted_by',type:DataType.INTEGER}) declare redactedBy: number | null;
   @CreatedAt @Column({ field: 'created_at', type: DataType.DATE }) declare createdAt: Date;
   @UpdatedAt @Column({ field: 'updated_at', type: DataType.DATE }) declare updatedAt: Date;
 }

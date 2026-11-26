@@ -4,7 +4,7 @@ import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
 import CustomerEnquiries from './CustomerEnquiries';
 import {enquiryApi} from '../api/customerEnquiries';
 import {useModuleAccess} from '../hooks/useModuleAccess';
-jest.mock('../api/customerEnquiries',()=>({enquiryApi:{list:jest.fn(),detail:jest.fn(),update:jest.fn(),templates:jest.fn(),preview:jest.fn(),saveTemplate:jest.fn()}}));
+jest.mock('../api/customerEnquiries',()=>({enquiryApi:{list:jest.fn(),detail:jest.fn(),update:jest.fn(),templates:jest.fn(),preview:jest.fn(),saveTemplate:jest.fn(),removalPreview:jest.fn(),removeContents:jest.fn()}}));
 jest.mock('../hooks/useModuleAccess');
 jest.mock('../components/access/PageAccessGuard',()=>({PageAccessGuard:({children}:{children:React.ReactNode})=><>{children}</>}));
 const api=enquiryApi as jest.Mocked<typeof enquiryApi>;
@@ -32,3 +32,9 @@ it('previews templates without sending or saving',async()=>{
 });
 it('does not fetch customer data without module access',async()=>{(useModuleAccess as jest.Mock).mockReturnValue({ready:true,loading:false,canView:false,canUpdate:false});show();expect(screen.getByText('You do not have access to the enquiry inbox.')).toBeInTheDocument();await waitFor(()=>expect(api.list).not.toHaveBeenCalled());});
 it('only includes earlier metadata records when the operator requests history',async()=>{show();await screen.findByText('Local enquiry');expect(api.list).toHaveBeenLastCalledWith(expect.objectContaining({includeLegacy:'0'}));fireEvent.click(screen.getByLabelText('Include earlier delivery records'));await waitFor(()=>expect(api.list).toHaveBeenLastCalledWith(expect.objectContaining({includeLegacy:'1'})));});
+it('does not expose removal to ordinary follow-up editors',async()=>{show();fireEvent.click(await screen.findByRole('button',{name:'Open enquiry'}));await screen.findByLabelText('Internal notes');expect(screen.queryByRole('button',{name:'Preview contents removal'})).not.toBeInTheDocument();expect(api.removalPreview).not.toHaveBeenCalled();});
+it('labels removed contents honestly and prevents follow-up restoration',async()=>{
+ api.detail.mockResolvedValue({...row,handlingStatus:'closed',redactedAt:'2026-11-26T12:00:00Z',enquiryData:null,staffNotes:'',gmailUrl:null,providerMessageId:null,rfcMessageId:'<local@test>',events:[]});show();
+ fireEvent.click(await screen.findByRole('button',{name:'Open enquiry'}));expect(await screen.findByText(/wider removal is not complete/)).toBeInTheDocument();
+ expect(screen.getByLabelText('Internal notes')).toBeDisabled();expect(screen.queryByRole('button',{name:'Save follow-up'})).not.toBeInTheDocument();expect(screen.queryByText(/Full form contents were not stored/)).not.toBeInTheDocument();
+});
